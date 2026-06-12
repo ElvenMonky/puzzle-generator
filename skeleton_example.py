@@ -1,9 +1,10 @@
-import random
+from time import time
 from z3 import Int, Solver, sat
-from transformations import REGISTRY
+from transformations import REGISTRY, Skeleton
+from visualize_skeleton import visualize_skeleton
 
 # Mock Skeleton definition
-skeleton = [
+skeleton: Skeleton = [
   { "type": "Canvas", "in": [] },
   { "type": "Dummy", "in": [0] },
   { "type": "AddGridLines", "in": [1] },
@@ -30,7 +31,12 @@ for index, step in enumerate(skeleton):
         for prop in ["width", "height"]:
             solver.add(Int(f"{other_id}_out_{out_index}_{prop}") == Int(f"{id}_in_{in_index}_{prop}"))
 
-if solver.check() == sat:
+start = time()
+result = solver.check()
+print(f"Solve time: {time() - start:.4f}s")
+print(solver.statistics())
+
+if result == sat:
     model = solver.model()
     print("Skeleton successfully resolved! Here are the computed parameters:")
     
@@ -38,5 +44,7 @@ if solver.check() == sat:
     # model.decls() gives us every variable the solver touched
     for d in model.decls():
         print(f"  {d.name()} = {model[d].as_long()}")
+
+    visualize_skeleton(skeleton, model)
 else:
     print("Skeleton is structurally impossible! The solver proved no valid configuration exists.")
