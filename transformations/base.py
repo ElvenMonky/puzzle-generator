@@ -1,8 +1,18 @@
-from typing import Any, Sequence
+from typing import Any, Sequence, TypedDict
 from z3 import Int, Solver
 import numpy as np
+from features.base import MAX_FEATURES
 
 MAX_SIZE = 32
+MAX_COLOR = 9
+
+class MinMax(TypedDict):
+    min: int
+    max: int
+
+class FeatureConfig(MinMax):
+    in_slots: dict[int, MinMax]
+    out_slots: dict[int, MinMax]
 
 class ARCTransformation:
     """
@@ -14,14 +24,27 @@ class ARCTransformation:
     """
     in_count = 1
     out_count = 1
-    REGISTRY = {}
+    config: dict[str, FeatureConfig] = {}
+    REGISTRY: dict[str, type[ARCTransformation]] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.REGISTRY[cls.__name__] = cls
 
+        merged_config = {}
+        for base in reversed(cls.__mro__):
+            if hasattr(base, 'config'):
+                for key, config in base.config.items():
+                    merged_config[key] = config
+        cls.config = merged_config
+
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str):
+    def register_features(cls, features: set[str]):
+        features |= cls.config.keys()
+
+    @classmethod
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
+        # 1. Base geometric constraints
         for prop in ["width", "height"]:
             for i in range(cls.in_count):
                 var = Int(f"{id}_in_{i}_{prop}")
@@ -29,38 +52,74 @@ class ARCTransformation:
             for i in range(cls.out_count):
                 var = Int(f"{id}_out_{i}_{prop}")
                 solver.add(var >= 1, var <= MAX_SIZE)
+        
+        # 2. Feature state constraints
+        for key in features:
+            config = cls.config.get(key, {})
+            
+            # --- INPUT SLOTS ---
+            sum_in = 0
+            for i in range(cls.in_count):
+                var = Int(f"{id}_{key}_in_{i}_count")
+                sum_in += var
+                
+                in_slot_config: MinMax = config.get("in_slots", {}).get(i)
+                solver.add(var >= in_slot_config.get("min", 0), var <= in_slot_config.get("max", MAX_FEATURES))
+            
+            # --- OUTPUT SLOTS ---
+            sum_out = 0
+            for i in range(cls.out_count):
+                var = Int(f"{id}_{key}_out_{i}_count")
+                sum_out += var
+                
+                out_slot_config: MinMax = config.get("out_slots", {}).get(i)
+                solver.add(var >= out_slot_config.get("min", 0), var <= out_slot_config.get("max", MAX_FEATURES))
+            
+            # --- DELTA (NET CHANGE) LOGIC ---
+            count = Int(f"{id}_{key}_count")
+            solver.add(count >= config.get("min", 0))
+            solver.add(count <= config.get("max", 0))
+            solver.add(sum_out == sum_in + count)
 
     def __init__(self, parameters: dict[str, Any]):
         self.parameters = parameters
 
     def execute(self, inputs: Sequence[np.ndarray]) -> tuple[np.ndarray]:
         """
-        PASS 2 (Forward): Pure, deterministic matrix execution.
+        Pure, deterministic matrix execution.
         Takes a tuple of required input arrays and computes output arrays.
         """
         raise NotImplementedError
 
     def describe(self, inputs: Sequence[np.ndarray]) -> str:
         """
-        PASS 2 (Forward): Synthesizes an exact, unambiguous text explanation 
-        of the logic step using the concrete runtime values and parameters.
+        Synthesizes an exact, unambiguous text explanation of the logic step
+        using the concrete runtime values and parameters.
         """
         raise NotImplementedError
 
-class Canvas(ARCTransformation):
+class CreateCanvas(ARCTransformation):
     """
     First transformation of every puzzle. Accepts 0 inputs.
     Generates list of empty training inputs and list of empty test inputs
     """
     in_count = 0
 
+    @classmethod
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
+        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+
+        background = Int(f"background")
+        
+        solver.add(background >= 0, background <= MAX_COLOR)
+
 class Dummy(ARCTransformation):
     """
     Transformation that does nothing
     """
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str):
-        super().register_variables_and_constraints(solver, id)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
+        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
 
         in_w, out_w = Int(f"{id}_in_0_width"), Int(f"{id}_out_0_width")
         in_h, out_h = Int(f"{id}_in_0_height"), Int(f"{id}_out_0_height")
