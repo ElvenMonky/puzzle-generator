@@ -9,10 +9,10 @@ from matplotlib.path import Path
 # 1. SHARED CONSTANTS & MATRICES
 # ==========================================
 DIR_MATRICES = [
-    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),   # 0: identity
-    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),  # 1: 90° left
-    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int), # 2: 180°
-    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),  # 3: 270° right
+    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
+    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
+    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
+    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
     np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
     np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
     np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
@@ -33,8 +33,7 @@ class Geometry:
         self.x = x; self.y = y; self.dir = dir; self.color = color
         self.parent = None
         self.geometries = geometries or []
-        for g in self.geometries:
-            g.parent = self
+        for g in self.geometries: g.parent = self
 
     @property
     def local_matrix(self):
@@ -44,27 +43,22 @@ class Geometry:
     def world_matrix(self):
         return self.parent.world_matrix @ self.local_matrix if self.parent else self.local_matrix
 
-    def get_local_points(self):
-        return []
+    def get_local_points(self): return []
 
 class Point(Geometry):
-    def get_local_points(self):
-        return [(0, 0, self.color)]
+    def get_local_points(self): return [(0, 0, self.color)]
 
 class Line(Geometry):
     def __init__(self, x=0, y=0, dir=0, length=1, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.length = length
-    def get_local_points(self):
-        return [(i, 0, self.color) for i in range(self.length)]
+    def get_local_points(self): return [(i, 0, self.color) for i in range(self.length)]
 
 class Diagonal(Geometry):
-    """Draws a diagonal line 45-degrees. dir=0: ↘, 1: ↙, 2: ↖, 3: ↗."""
     def __init__(self, x=0, y=0, dir=0, length=1, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.length = length
-    def get_local_points(self):
-        return [(i, i, self.color) for i in range(self.length)]
+    def get_local_points(self): return [(i, i, self.color) for i in range(self.length)]
 
 class Polygon(Geometry):
     def __init__(self, x=0, y=0, dir=0, color=None, fill_color=None, vertices=None, geometries=None):
@@ -73,28 +67,23 @@ class Polygon(Geometry):
         self.fill_color = fill_color
 
     def get_local_points(self):
-        if not self.vertices:
-            return []
+        if not self.vertices: return []
         points = {}
         path = Path(self.vertices)
         xs, ys = [v[0] for v in self.vertices], [v[1] for v in self.vertices]
         min_x, max_x, min_y, max_y = int(min(xs)), int(max(xs)), int(min(ys)), int(max(ys))
         int_color = self.fill_color if self.fill_color is not None else self.color
-        for py in range(min_y, max_y + 1):
+        for py in range(min_y, max_y+1):
             points[py] = {}
-            for px in range(min_x, max_x + 1):
+            for px in range(min_x, max_x+1):
                 points[py][px] = -1
-                if path.contains_point((px, py), radius=0.1):
-                    points[py][px] = int_color
+                if path.contains_point((px, py), radius=0.1): points[py][px] = int_color
         for i in range(len(self.vertices)):
-            x0, y0 = self.vertices[i]
-            x1, y1 = self.vertices[i - 1]
+            x0, y0 = self.vertices[i]; x1, y1 = self.vertices[i-1]
             if x0 == x1:
-                for y in range(min(y0, y1), max(y0, y1) + 1):
-                    points[y][x0] = self.color
+                for y in range(min(y0, y1), max(y0, y1)+1): points[y][x0] = self.color
             elif y0 == y1:
-                for x in range(min(x0, x1), max(x0, x1) + 1):
-                    points[y0][x] = self.color
+                for x in range(min(x0, x1), max(x0, x1)+1): points[y0][x] = self.color
         return [(x, y, points[y][x]) for y in points for x in points[y]]
 
 class Canvas:
@@ -106,14 +95,10 @@ class Canvas:
         y = g_spec.get("y", 0)
         d = g_spec.get("dir", 0)
         subs = [Canvas.parse_geometry(s) for s in g_spec.get("geometries", [])]
-        if t == "Polygon":
-            return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertices=g_spec.get("vertices", []), geometries=subs)
-        elif t == "Line":
-            return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
-        elif t == "Diagonal":
-            return Diagonal(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
-        elif t == "Point":
-            return Point(x=x, y=y, dir=d, color=c, geometries=subs)
+        if t == "Polygon": return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertices=g_spec.get("vertices", []), geometries=subs)
+        elif t == "Line": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
+        elif t == "Diagonal": return Diagonal(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
+        elif t == "Point": return Point(x=x, y=y, dir=d, color=c, geometries=subs)
         return Geometry(x=x, y=y, dir=d, color=c, geometries=subs)
 
     @staticmethod
@@ -145,7 +130,6 @@ class Canvas:
 # 3. UNIFIED RANGE UTILITIES
 # ==========================================
 def parse_range(spec):
-    """Return (min, max, step) from a range specification."""
     if isinstance(spec, (int, float)):
         return int(spec), int(spec), 1
     if len(spec) == 2:
@@ -153,7 +137,6 @@ def parse_range(spec):
     return int(spec[0]), int(spec[1]), int(spec[2])
 
 def roll_range(spec):
-    """Random concrete value from a range spec."""
     if isinstance(spec, (int, float)):
         return int(spec)
     lo, hi, step = parse_range(spec)
@@ -163,14 +146,12 @@ def roll_range(spec):
     return lo + random.randint(0, n) * step
 
 def add_range_constraint(var, spec, solver):
-    """Add Z3 constraints for the variable to respect the range spec."""
     lo, hi, step = parse_range(spec)
     solver.add(var >= lo, var <= hi)
     if step > 1:
         solver.add((var - lo) % step == 0)
 
 def range_expr(var, spec):
-    """Return a Z3 expression (And) that constrains var to the range."""
     lo, hi, step = parse_range(spec)
     if step == 1:
         return And(var >= lo, var <= hi)
@@ -188,23 +169,30 @@ class GeneratorContext:
         self.var = 0
 
 class GroupPlacement:
-    def __init__(self, spec, parent_bounds, solver, ctx):
+    def __init__(self, spec, parent_bounds, solver, ctx, inherited_color=None):
         self.spec = spec
         self.solver = solver
         self.ctx = ctx
         self.px, self.py, self.pw, self.ph = parent_bounds
+        # inherited_color may be -1 (transparent), a fixed int, or a range spec
+        self.inherited_color = inherited_color
 
         # Determine min/max/step for count
         count_spec = spec.get("count", 1)
         self.min_count, self.max_count, self.step_count = parse_range(count_spec)
 
-        # count variable with step
         self.count_var = Int(f"cnt_{ctx.var}"); ctx.var += 1
         add_range_constraint(self.count_var, count_spec, solver)
 
-        self.instances = []          # one per potential instance (max_count)
-        self.child_groups = []       # list of lists of GroupPlacement per instance
-        self.link_vars = []          # for tree strategy (one per i > 0)
+        self.instances = []
+        self.child_groups = []
+        self.link_vars = []
+
+        # Resolved color for passing to children: own color if present, else inherited
+        if "color" in spec:
+            self.resolved_color = spec["color"]   # may be a range or int
+        else:
+            self.resolved_color = inherited_color
 
         for i in range(self.max_count):
             x = Int(f"x_{ctx.var}"); ctx.var += 1
@@ -212,7 +200,6 @@ class GroupPlacement:
             w = Int(f"w_{ctx.var}"); ctx.var += 1
             h = Int(f"h_{ctx.var}"); ctx.var += 1
 
-            # Active only if i < count_var
             active = i < self.count_var
             solver.add(If(active,
                           And(x >= self.px, y >= self.py,
@@ -224,16 +211,16 @@ class GroupPlacement:
             inst = Instance(x, y, w, h)
             self.instances.append(inst)
 
-            # Children: every spec may have 'geometries'
             child_list = []
             for child_spec in spec.get("geometries", []):
                 child = GroupPlacement(child_spec,
                                        parent_bounds=(x, y, w, h),
-                                       solver=solver, ctx=ctx)
+                                       solver=solver, ctx=ctx,
+                                       inherited_color=self.resolved_color)
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints (only for active instances)
+        # Size constraints
         size_spec = spec.get("size", {})
         if size_spec:
             for i in range(self.max_count):
@@ -247,14 +234,12 @@ class GroupPlacement:
                 if "min" in size_spec or "max" in size_spec:
                     min_spec = size_spec.get("min", [1, 1])
                     max_spec = size_spec.get("max", min_spec)
-                    # The 'min' and 'max' apply to the smaller and larger side
                     c.append(If(w_var <= h_var,
                                 And(range_expr(w_var, min_spec), range_expr(h_var, max_spec)),
                                 And(range_expr(h_var, min_spec), range_expr(w_var, max_spec))))
                 if c:
                     solver.add(Implies(i < self.count_var, And(c)))
 
-        # Point type forces 1x1 size
         if spec["type"] == "Point":
             for i in range(self.max_count):
                 solver.add(Implies(i < self.count_var,
@@ -269,7 +254,6 @@ class GroupPlacement:
         cnt = self.count_var
         insts = self.instances
 
-        # Non-overlap between any two active instances
         for i in range(max_n):
             for j in range(i + 1, max_n):
                 a, b = insts[i], insts[j]
@@ -284,7 +268,6 @@ class GroupPlacement:
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-                lmin, lmax, lstep = parse_range(link_spec["length"])
                 for i in range(1, max_n):
                     lvar = Int(f"link_{self.ctx.var}"); self.ctx.var += 1
                     self.link_vars.append(lvar)
@@ -321,11 +304,16 @@ class GroupPlacement:
 
         for i in range(count_val):
             inst = self.instances[i]
-            ix = model[inst.x].as_long()      # absolute canvas x
+            ix = model[inst.x].as_long()
             iy = model[inst.y].as_long()
             iw = model[inst.w].as_long()
             ih = model[inst.h].as_long()
-            color = roll_range(spec.get("color", 1))
+            # Resolve color: own color if present, else inherited
+            if "color" in spec:
+                color = roll_range(spec["color"])
+            else:
+                # inherited_color might be a range or an int (like -1)
+                color = roll_range(self.inherited_color) if self.inherited_color is not None else -1
 
             # ---- Own shape ----
             if spec["type"] == "Rectangle":
@@ -349,7 +337,6 @@ class GroupPlacement:
                 for child_group in self.child_groups[i]:
                     child_list.extend(child_group.extract_geometries(model, offset_x=ix, offset_y=iy))
                 if spec["type"] == "Geometry":
-                    # Pure container: output a Geometry node with children
                     result.append({
                         "type": "Geometry",
                         "x": ix - offset_x,
@@ -360,7 +347,7 @@ class GroupPlacement:
                 else:
                     result.extend(child_list)
 
-        # ---- Links (for tree) ----
+        # ---- Links ----
         if spec.get("strategy") == "tree" and "link" in spec and count_val > 1:
             link_geoms = self._extract_links(model, count_val, offset_x, offset_y)
             result.extend(link_geoms)
@@ -371,7 +358,12 @@ class GroupPlacement:
         geoms = []
         spec = self.spec
         link_spec = spec["link"]
-        link_color = roll_range(spec.get("color", 1))
+        # Link color: explicit link.color, else resolved color of this group
+        if "color" in link_spec:
+            link_color = roll_range(link_spec["color"])
+        else:
+            link_color = roll_range(self.resolved_color) if self.resolved_color is not None else -1
+
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
         for i in range(1, count_val):
             child = self.instances[i]
@@ -441,7 +433,6 @@ class GroupPlacement:
 class PuzzleGen:
     @staticmethod
     def roll(val, default_min=0, default_max=32):
-        """Old helper – still used for canvas size? Now we use roll_range everywhere else."""
         if isinstance(val, list):
             a, b = val
             if a is None: a = default_min
@@ -466,13 +457,14 @@ class PuzzleGen:
         solver.add(canvas_w >= min_w, canvas_w <= max_w)
         solver.add(canvas_h >= min_h, canvas_h <= max_h)
 
-        # Process all layers
         layer_groups = []
         for layer_spec in gen_spec["layers"]:
+            layer_inherited = layer_spec["color"] if "color" in layer_spec else -1
             root_group = GroupPlacement(
                 layer_spec,
                 parent_bounds=(0, 0, canvas_w, canvas_h),
-                solver=solver, ctx=ctx
+                solver=solver, ctx=ctx,
+                inherited_color=layer_inherited
             )
             layer_groups.append((layer_spec, root_group))
 
@@ -486,7 +478,7 @@ class PuzzleGen:
         layers_geoms = []
         for layer_spec, root_group in layer_groups:
             extracted = root_group.extract_geometries(model, offset_x=0, offset_y=0)
-            layer_color = roll_range(layer_spec.get("color", 1))
+            layer_color = roll_range(layer_spec["color"]) if "color" in layer_spec else -1
             layers_geoms.append({
                 "type": layer_spec.get("type", "Geometry"),
                 "x": 0, "y": 0,
@@ -538,7 +530,6 @@ if __name__ == "__main__":
                 ]
             },
             {
-                "color": 3,
                 "count": 5,
                 "gap": 1,
                 "size": {"width": [1, 1], "height": [1, 1]},
@@ -551,16 +542,17 @@ if __name__ == "__main__":
     exact = PuzzleGen.generate_exact_spec(generative_spec)
     grid_in = Canvas.parse_canvas(exact).render()
 
-    # ---- Simulate output: fill each cluster with its own point's color ----
+    # Fill each cluster with its own point's color
     def fill_container(node):
         point_color = None
         polys = []
         for g in node.get("geometries", []):
             if g["type"] == "Point":
                 point_color = g["color"]
+                g["color"] = -1
             elif g["type"] == "Polygon":
                 polys.append(g)
-            elif "geometries" in g:   # any container
+            elif "geometries" in g:
                 fill_container(g)
         if point_color is not None:
             for p in polys:
@@ -581,5 +573,5 @@ if __name__ == "__main__":
         ax.set_xticks(np.arange(-0.5, exact['width'], 1), [])
         ax.set_yticks(np.arange(-0.5, exact['height'], 1), [])
     plt.tight_layout()
-    plt.savefig("final_working.png")
-    print("Done. See final_working.png")
+    plt.savefig("transparent_default.png")
+    print("Done. See transparent_default.png")
