@@ -42,37 +42,29 @@ class Geometry:
 
     @property
     def world_matrix(self):
-        if self.parent:
-            return self.parent.world_matrix @ self.local_matrix
-        return self.local_matrix
+        return self.parent.world_matrix @ self.local_matrix if self.parent else self.local_matrix
 
     def get_local_points(self):
         return []
-
 
 class Point(Geometry):
     def get_local_points(self):
         return [(0, 0, self.color)]
 
-
 class Line(Geometry):
     def __init__(self, x=0, y=0, dir=0, length=1, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.length = length
-
     def get_local_points(self):
         return [(i, 0, self.color) for i in range(self.length)]
 
-
 class Diagonal(Geometry):
-    """Draws a diagonal line. dir=0: ↘, 1: ↙, 2: ↖, 3: ↗."""
+    """Draws a diagonal line 45-degrees. dir=0: ↘, 1: ↙, 2: ↖, 3: ↗."""
     def __init__(self, x=0, y=0, dir=0, length=1, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.length = length
-
     def get_local_points(self):
         return [(i, i, self.color) for i in range(self.length)]
-
 
 class Polygon(Geometry):
     def __init__(self, x=0, y=0, dir=0, color=None, fill_color=None, vertices=None, geometries=None):
@@ -85,10 +77,8 @@ class Polygon(Geometry):
             return []
         points = {}
         path = Path(self.vertices)
-        xs = [v[0] for v in self.vertices]
-        ys = [v[1] for v in self.vertices]
-        min_x, max_x = int(min(xs)), int(max(xs))
-        min_y, max_y = int(min(ys)), int(max(ys))
+        xs, ys = [v[0] for v in self.vertices], [v[1] for v in self.vertices]
+        min_x, max_x, min_y, max_y = int(min(xs)), int(max(xs)), int(min(ys)), int(max(ys))
         int_color = self.fill_color if self.fill_color is not None else self.color
         for py in range(min_y, max_y + 1):
             points[py] = {}
@@ -107,7 +97,6 @@ class Polygon(Geometry):
                     points[y0][x] = self.color
         return [(x, y, points[y][x]) for y in points for x in points[y]]
 
-
 class Canvas:
     @staticmethod
     def parse_geometry(g_spec):
@@ -118,16 +107,11 @@ class Canvas:
         d = g_spec.get("dir", 0)
         subs = [Canvas.parse_geometry(s) for s in g_spec.get("geometries", [])]
         if t == "Polygon":
-            return Polygon(x=x, y=y, dir=d, color=c,
-                           fill_color=g_spec.get("fill_color"),
-                           vertices=g_spec.get("vertices", []),
-                           geometries=subs)
+            return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertices=g_spec.get("vertices", []), geometries=subs)
         elif t == "Line":
-            return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1),
-                        color=c, geometries=subs)
+            return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
         elif t == "Diagonal":
-            return Diagonal(x=x, y=y, dir=d, length=g_spec.get("length", 1),
-                            color=c, geometries=subs)
+            return Diagonal(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
         elif t == "Point":
             return Point(x=x, y=y, dir=d, color=c, geometries=subs)
         return Geometry(x=x, y=y, dir=d, color=c, geometries=subs)
@@ -135,55 +119,73 @@ class Canvas:
     @staticmethod
     def parse_canvas(spec):
         layers = [Canvas.parse_geometry(s) for s in spec.get("layers", [])]
-        return Canvas(width=spec["width"], height=spec["height"],
-                      background=spec.get("background", 0), layers=layers)
+        return Canvas(width=spec["width"], height=spec["height"], background=spec.get("background", 0), layers=layers)
 
     def __init__(self, width, height, background=0, layers=None):
-        self.width = width
-        self.height = height
-        self.background = background
+        self.width, self.height, self.background = width, height, background
         self.layers = layers or []
-
-    def add_layer(self, layer):
-        self.layers.append(layer)
 
     def render(self):
         grid = np.full((self.height, self.width), self.background, dtype=int)
-
-        def collect(node, inherited_color):
+        def collect(node, col):
             pts = []
-            cur = getattr(node, 'color', None)
-            cur = inherited_color if cur is None else cur
+            cur = getattr(node, 'color', None) or col
             if isinstance(node, Geometry):
                 for px, py, c in node.get_local_points():
-                    pts.append(((node.world_matrix @ np.array([px, py, 1], dtype=int))[:2].tolist()
-                                + [c if c is not None else cur]))
-            for child in node.geometries:
-                pts.extend(collect(child, cur))
+                    pts.append(((node.world_matrix @ [px, py, 1])[:2].tolist() + [c if c is not None else cur]))
+            for ch in node.geometries: pts.extend(collect(ch, cur))
             return pts
-
         for layer in self.layers:
             for wx, wy, c in collect(layer, layer.color):
                 if 0 <= wx < self.width and 0 <= wy < self.height and c not in (None, -1):
                     grid[wy, wx] = c
         return grid
 
+# ==========================================
+# 3. UNIFIED RANGE UTILITIES
+# ==========================================
+def parse_range(spec):
+    """Return (min, max, step) from a range specification."""
+    if isinstance(spec, (int, float)):
+        return int(spec), int(spec), 1
+    if len(spec) == 2:
+        return int(spec[0]), int(spec[1]), 1
+    return int(spec[0]), int(spec[1]), int(spec[2])
+
+def roll_range(spec):
+    """Random concrete value from a range spec."""
+    if isinstance(spec, (int, float)):
+        return int(spec)
+    lo, hi, step = parse_range(spec)
+    if step == 1:
+        return random.randint(lo, hi)
+    n = (hi - lo) // step
+    return lo + random.randint(0, n) * step
+
+def add_range_constraint(var, spec, solver):
+    """Add Z3 constraints for the variable to respect the range spec."""
+    lo, hi, step = parse_range(spec)
+    solver.add(var >= lo, var <= hi)
+    if step > 1:
+        solver.add((var - lo) % step == 0)
+
+def range_expr(var, spec):
+    """Return a Z3 expression (And) that constrains var to the range."""
+    lo, hi, step = parse_range(spec)
+    if step == 1:
+        return And(var >= lo, var <= hi)
+    return And(var >= lo, var <= hi, (var - lo) % step == 0)
 
 # ==========================================
-# 3. Z3-BASED GROUP PLACEMENT ENGINE
+# 4. Z3-BASED GROUP PLACEMENT ENGINE
 # ==========================================
 class Instance:
     def __init__(self, x, y, w, h):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
-
+        self.x = x; self.y = y; self.w = w; self.h = h
 
 class GeneratorContext:
     def __init__(self):
         self.var = 0
-
 
 class GroupPlacement:
     def __init__(self, spec, parent_bounds, solver, ctx):
@@ -192,18 +194,13 @@ class GroupPlacement:
         self.ctx = ctx
         self.px, self.py, self.pw, self.ph = parent_bounds
 
-        # Determine min/max count
+        # Determine min/max/step for count
         count_spec = spec.get("count", 1)
-        if isinstance(count_spec, list):
-            self.min_count = count_spec[0]
-            self.max_count = count_spec[1]
-        else:
-            self.min_count = self.max_count = count_spec
+        self.min_count, self.max_count, self.step_count = parse_range(count_spec)
 
-        # count variable
-        self.count_var = Int(f"cnt_{ctx.var}")
-        ctx.var += 1
-        solver.add(self.count_var >= self.min_count, self.count_var <= self.max_count)
+        # count variable with step
+        self.count_var = Int(f"cnt_{ctx.var}"); ctx.var += 1
+        add_range_constraint(self.count_var, count_spec, solver)
 
         self.instances = []          # one per potential instance (max_count)
         self.child_groups = []       # list of lists of GroupPlacement per instance
@@ -244,17 +241,16 @@ class GroupPlacement:
                 h_var = self.instances[i].h
                 c = []
                 if "width" in size_spec:
-                    c.append(And(w_var >= size_spec["width"][0], w_var <= size_spec["width"][1]))
+                    c.append(range_expr(w_var, size_spec["width"]))
                 if "height" in size_spec:
-                    c.append(And(h_var >= size_spec["height"][0], h_var <= size_spec["height"][1]))
+                    c.append(range_expr(h_var, size_spec["height"]))
                 if "min" in size_spec or "max" in size_spec:
-                    min_r = size_spec.get("min", [1, 1])
-                    max_r = size_spec.get("max", min_r)
+                    min_spec = size_spec.get("min", [1, 1])
+                    max_spec = size_spec.get("max", min_spec)
+                    # The 'min' and 'max' apply to the smaller and larger side
                     c.append(If(w_var <= h_var,
-                                And(w_var >= min_r[0], w_var <= min_r[1],
-                                    h_var >= max_r[0], h_var <= max_r[1]),
-                                And(h_var >= min_r[0], h_var <= min_r[1],
-                                    w_var >= max_r[0], w_var <= max_r[1])))
+                                And(range_expr(w_var, min_spec), range_expr(h_var, max_spec)),
+                                And(range_expr(h_var, min_spec), range_expr(w_var, max_spec))))
                 if c:
                     solver.add(Implies(i < self.count_var, And(c)))
 
@@ -288,11 +284,11 @@ class GroupPlacement:
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-                lmin, lmax = link_spec["length"] if isinstance(link_spec["length"], list) else (link_spec["length"], link_spec["length"])
+                lmin, lmax, lstep = parse_range(link_spec["length"])
                 for i in range(1, max_n):
                     lvar = Int(f"link_{self.ctx.var}"); self.ctx.var += 1
                     self.link_vars.append(lvar)
-                    self.solver.add(Implies(i < cnt, And(lvar >= lmin, lvar <= lmax)))
+                    self.solver.add(Implies(i < cnt, range_expr(lvar, link_spec["length"])))
                     adj = []
                     b = insts[i]
                     for j in range(i):
@@ -319,12 +315,6 @@ class GroupPlacement:
                     self.solver.add(Implies(i < cnt, Or(adj)))
 
     def extract_geometries(self, model, offset_x=0, offset_y=0):
-        """
-        Returns a list of geometry dicts for the active instances.
-        - All coordinates are made relative to the parent by subtracting offset_x/offset_y.
-        - If the type is 'Geometry', it outputs a container with no own shape.
-        - Otherwise, it outputs the shape (Polygon/Point/Line/etc.) and then its children.
-        """
         spec = self.spec
         count_val = model[self.count_var].as_long()
         result = []
@@ -335,7 +325,7 @@ class GroupPlacement:
             iy = model[inst.y].as_long()
             iw = model[inst.w].as_long()
             ih = model[inst.h].as_long()
-            color = PuzzleGen.roll(spec.get("color", 1))
+            color = roll_range(spec.get("color", 1))
 
             # ---- Own shape ----
             if spec["type"] == "Rectangle":
@@ -354,7 +344,7 @@ class GroupPlacement:
             # ... other leaf types
 
             # ---- Children ----
-            if self.child_groups[i]:  # there is at least one child group
+            if self.child_groups[i]:
                 child_list = []
                 for child_group in self.child_groups[i]:
                     child_list.extend(child_group.extract_geometries(model, offset_x=ix, offset_y=iy))
@@ -368,7 +358,6 @@ class GroupPlacement:
                         "geometries": child_list
                     })
                 else:
-                    # Shape with children: just append children; they are logically inside
                     result.extend(child_list)
 
         # ---- Links (for tree) ----
@@ -379,11 +368,10 @@ class GroupPlacement:
         return result
 
     def _extract_links(self, model, count_val, offset_x, offset_y):
-        """Helper to extract link geometries (Line/Diagonal) for a tree group."""
         geoms = []
         spec = self.spec
         link_spec = spec["link"]
-        link_color = PuzzleGen.roll(spec.get("color", 1))
+        link_color = roll_range(spec.get("color", 1))
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
         for i in range(1, count_val):
             child = self.instances[i]
@@ -447,13 +435,13 @@ class GroupPlacement:
                         found = True; break
         return geoms
 
-
 # ==========================================
-# 4. MAIN GENERATOR (multi‑layer)
+# 5. MAIN GENERATOR (multi‑layer)
 # ==========================================
 class PuzzleGen:
     @staticmethod
     def roll(val, default_min=0, default_max=32):
+        """Old helper – still used for canvas size? Now we use roll_range everywhere else."""
         if isinstance(val, list):
             a, b = val
             if a is None: a = default_min
@@ -497,10 +485,8 @@ class PuzzleGen:
 
         layers_geoms = []
         for layer_spec, root_group in layer_groups:
-            # The root extraction returns a list of top-level geometry dicts
-            # (the layer itself is a container, so it returns a list of container dicts)
             extracted = root_group.extract_geometries(model, offset_x=0, offset_y=0)
-            layer_color = PuzzleGen.roll(layer_spec.get("color", 1))
+            layer_color = roll_range(layer_spec.get("color", 1))
             layers_geoms.append({
                 "type": layer_spec.get("type", "Geometry"),
                 "x": 0, "y": 0,
@@ -516,13 +502,10 @@ class PuzzleGen:
             "layers": layers_geoms
         }
 
-
 # ==========================================
-# 5. EXECUTION
+# 6. EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    # Example: multiple clusters, each with rectangles (line+diagonal links) and a point.
-    # Second layer adds random red points.
     generative_spec = {
         "type": "Canvas",
         "width": [16, 32],
@@ -577,7 +560,7 @@ if __name__ == "__main__":
                 point_color = g["color"]
             elif g["type"] == "Polygon":
                 polys.append(g)
-            elif "geometries" in g:   # any container (Geometry, Rectangle, ...)
+            elif "geometries" in g:   # any container
                 fill_container(g)
         if point_color is not None:
             for p in polys:
