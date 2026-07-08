@@ -3,8 +3,8 @@ from transformations.base import ARCTransformation, MAX_SIZE
 
 class AddGridLines(ARCTransformation):
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
 
         h_count = Int(f"{id}_param_h_count")
         h_start = Int(f"{id}_param_h_start")

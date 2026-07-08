@@ -1,35 +1,78 @@
 # ARC Synthetic Puzzle Generator Engine
 
-I'm building engine capable of creating virtually unlimited number of valid synthetic puzzles intended to be used in Language Model (LM) training. All generated puzzles are accompanied with accurate and detailed CoT-like descriptions, specifically designed to guide LM thinking.
+We're building an engine capable of creating virtually unlimited number of valid synthetic puzzles intended to be used in Language Model (LM) training. All generated puzzles are accompanied with accurate and detailed CoT-like descriptions, specifically designed to guide LM thinking.
 
 Creating puzzles from scratch eliminates the need to guess sequences of transformations from existing data or use Large commercial language models to solve the puzzles and generate CoT samples for small model training. Even best of existing LLMs often fail to produce correct, consistent and non-confusing descriptions for majority of the puzzles.
 
 Using traditional programming techniques to construct complete puzzles along with their text descriptions from scratch, guarantees 100% accuracy, consistency and non-redundance of generated descriptions, which are not susceptible of any kind of hallucination because all the specific transformations, their parameters and interconnections are known to generating engine at the time of generation.
 
-## Puzzle anatomy
+## Canvas
 
-We start by defining puzzle as a sequence of transformations of various types, Directed Acyclic Graph of connections between inputs and outputs of different transformations in the sequence, along with set of specific parameters that fully define state of every transformation in the sequence.
+We start by defining `canvas` as a class that represents 2D matrix (axis aligned rectangular 2D area) where anything is drawn. Canvas has `width` and `height` both in range 1 to 32. Canvas has a `background` color - number in range 0 to 9.
 
-There is a number of transformation types that can be used to generate puzzles. New transformation types can be defined, depending on which transformations model needs to learn to recognize and apply.
+From now on we define `x` as horizontal axis of the canvas (rows) and `y` as its vertical axis (columns).
+
+Finally canvas holds list of `layers` - objects defined by:
+* `x` and `y` position where object drawing starts
+* `dir` orientation with values 0 to 7 that defines combination of 4 90-degree rotations and diagonal flip (swap of x and y axis)
+* extent (`left`, `top`, `right`, `bottom`) relative to object's position that limits area where object is visible
+* list of `geometries` that are used to draw an object
+* `mask` that defines list of relative positions within extent where drawing should be skipped 
+* `type` that determines all aspects of object construction and transfromation
+
+Layers can overlap and go beyond canvas. Only part within canvas is visible.
+
+Order of layers is an order in which layers are drawn on canvas, each layer on top of all previous.
+
+## Geometries
+
+All geometries have:
+* `x` and `y` position and `dir` orientation - relative to parent layer or geometry
+* `color` - number in range -1 to 9 or None (null), where -1 means transparent (keep existing underlying color) and None means use parent color.
+* `type` that identifies type of geometry and its internal structure
+* list of `geometies` - subgeometries that are included into this geometry
+
+There are following basic types of geometries:
+
+* `Point` single point in specified cosition and of specified color
+* `Line` horizontal line of at least 2 consequtive points. It contains `start` and `end` points, which are included as first and last in list of geometries as well as any intermediate points that need to be defined separately to have distinct color. `dir` is used to represent vertical lines.
+* `Diagonal` line that goes 45-degree diagonally from negative `x` and `y` to positive. Otherwise similar to `Line`.
+* `Polygon` consists of closed loop of `edges` (lines or diagonals), whose ends are starts of next edges. Set of all starts is referenced separately as `vertices`. Loop of edges should not be self intersecting. Everything inside the perimeter excluding edges and vertices themselves is an interior that inherits polygon's color and consists of internal geometries (polygons, lines, diagonals, points).
+* `Composite` geometry consists of list of any other geometries
+* `Point Cloud` variant of `Composite` geometry that consists of points
+
+Another types of geometries can be defined each with their unique features and behavior.
+ 
+## Transformations
+
+Next we define `transformation` as a class that represents transformation rule of a set of input canvases into a set of output canvases.
+
+There is a number of transformation types that can be used to generate puzzles.
+New transformation types can be defined, depending on which transformations model needs to learn to recognize and apply.
 
 Each transformation type defines:
 * number of inputs it takes (per sample), as well as specification (requirements/constraints) on each input
 * number of outputs it produces (per sample)
-* way to initialize valid internal parameter state, description and per sample outputs from inputs generated by previous transformations in the chain and from specifications provided by follow up transformations.
+* way to initialize valid internal parameter state, description and per sample outputs from inputs generated by previous transformations in the chain and from specifications provided by transformations that follow.
 
-## Skeleton of the puzzle
+## Samples and Skeleton of the puzzle
 
-We call sequence of transformations and graph of connections between their inputs and outputs a skeleton of the puzzle. Multiple puzzles can share same or very similar skeleton and only differ by internal parameter state of each transformation, which together determine both puzzle input and its solution description. As a reminder puzzle input includes 2 sets of input/output sample pairs: training set where both input and output from the sample pair are visible to the entity solving the puzzle, and test set, where only input is visible and output is used to determine correctness of the prediction.
+Each puzzle consists of samples. There are 2 sets of input/output sample pairs: training set where both input and output from the sample pair are visible to the entity solving the puzzle, and test set, where only input is visible and output is used to determine correctness of the prediction.
+
+We define a `skeleton` of the `puzzle` as a sequence of transformations of various types, specifically Directed Acyclic Graph of connections between inputs and outputs of different transformations in the sequence. Multiple puzzles can share same or very similar skeleton.
+
+All samples of an individual puzzle share puzzle's skeleton and parameter selection logic and only differ by internal parameter state of each transformation, which completely determines sample input.
+Shared skeleton and parameter selection logic along with references to generated smaple data ultimately determines complete solution description.
 
 There are 2 alternative representations of the puzzle's skeleton.
 
 String-based DSL representation helps naturally understand data flow of the generated puzzles that have this skeleton:
 ```
-v0 = GenerateEmptyCanvas()
-v1 = PlaceArrangedObjects(v0)
+v0 = CreateCanvas()
+v1 = AddPointCloud(v0)
 v2 = AddGridLines(v1)
 v3_0, v3_1 = Split(v2)
-v4 = RecolorByMask(v3_1)
+v4 = Rotate90(v3_1)
 v5 = Tile(v4)
 v6 = Upscale(v3_0)
 v7 = Merge(v5, v6)
@@ -38,11 +81,11 @@ v7 = Merge(v5, v6)
 JSON representation can be useful to store skeletons in the dataset:
 ```
 [
-  { "type": "GenerateEmptyCanvas", "in": [] },
-  { "type": "PlaceArrangedObjects", "in": [0] },
+  { "type": "CreateCanvas", "in": [] },
+  { "type": "AddPointCloud", "in": [0] },
   { "type": "AddGridLines", "in": [1] },
   { "type": "Split", "in": [2] },
-  { "type": "RecolorByMask", "in": [[3, 1]] },
+  { "type": "Rotate90", "in": [[3, 1]] },
   { "type": "Tile", "in": [4] },
   { "type": "Upscale", "in": [3] },
   { "type": "Merge", "in": [5, 6] },
@@ -52,31 +95,61 @@ Note: `"in": [3]` is the same as `"in": [[3, 0]]`.
 
 To check validity of the skeleton, we mostly need to test that number of inputs and outputs of each transformation match its type definition.
 
-## Puzzle generation
+## Palette
+
+Palette is a random mapping from numbers 0 to 9 to ten colors that are also represented by numbers from 0 to 9.
+Every puzzle has it own randomly generated shared palette that is used by every sample.
+
+Puzzle logic may require to have some subset of colors to be shared between samples and rest of colors to be uniquily shuffled per sample.
+For this reason puzzle can define a number threshold of colors to be shuffled per sample.
+Individual samples then will have their own individual palette that will consist of shuffled part and shared part. For now we assume that any shuffled part when present includes background color, which is defined as first color in the palette (having key 0).
+
+All colors referenced by geometries refer to individual sample's palette.
+
+## Skeleton generation
 
 Instead of creating puzzles from random input to later verify its validity across all transformations, we create puzzle input from scratch using transformations.
 
 Each puzzle generation starts with determining skeleton that will be used, index of transformation whose output will be treated as puzzle's input samples, as well as number of training and test samples to be generated.
 
-GenerateEmptyCanvas is a special transformation type, that every puzzle's skeleton starts with. It accepts 0 inputs and defines width, height and background for every training and test sample, taking into account constraints of downstream transformations.
+CreateCanvas is a special transformation type, that every puzzle's skeleton starts with. It accepts 0 inputs and defines width, height and background for every training and test sample, taking into account constraints of downstream transformations.
 
 Most other transformations require at least one input from an upstream transformation.
 
-Final output from the transformation sequence is taken as output samples of the generated puzzle.
+Final output from the transformation sequence is taken as output of the generated puzzle.
+
+Transformations in a skeleton negotiate their constrains to determine skeleton's validity (ability to produce valid puzzle samples) and only valid skeleton's are used for puzzle generation.
+
+## Criteria
+
+Apart from a skeleton, all samples within puzzle share logic that individual transformations need to use when transformation needs to:
+* pick one or more objects on a canvas. We refer to seletion of multiple objects as `filtering` and of one object as `selection`. Selection criteria can have multiple `filter`s and at most one `selector`.
+* apply modifications to individual attributes of `canvas`, its `layers` or their `geometries`. These attributes can control color, position, dimentions or orientation and will generally be always represented by integer numbers in range that does not exceed -32 to 32.
+
+Such criteria along with skeleton are shared between samples and constitute logic of the puzzle that needs to be showcased and respected in individual samples and ultimately described in the solution description.
+
+Exact representation and implementation of puzzle's criteria is TBD.
+
+## Description
 
 Puzzle's description is initialized with description of it's global state followed by chain of descriptions from transformations in the skeleton and concluded by the final answer to the puzzle.
 
-## The Two-Pass Engine
+// TODO
 
-To guarantee that every generated puzzle is 100% valid without relying on trial-and-error, the engine uses a bidirectional execution model:
+## Pipeline
 
-* Pass 1: Backward Constraint Propagation.
+Overall pipeline of the puzzle generator looks something like this:
 
-The engine reads the skeleton from bottom to top. Downstream transformations declare their requirements (e.g., "I need a grid of at least 10x10" or "I need exactly 3 distinct shapes"). These constraints are passed upstream until they reach the root.
+* Generate random skeletons (DAGs), verify validity (at least one sample can exist with this skeleton) using z3 solver that does not care about shared data and multiple samples.
+* Determine scope of possible shared parameters and value ranges for the skeleton
+* Place valid parametrizable skeletons into library/file, save
+* Load skeleton for puzzle generation
+* Pick sharable parameter values, mappings, rules within parameter scope
+* Maybe solve some simplified solvable z3 problem for skeleton + samples + shared params
+* Generate geometric representations (sequences of canvas outputs from transformations) of samples
+* Render input/output grids from respective canvases
+* Render solution description in a single forward pass through skeleton passing relevant shared params again along with respective input and output canvases 
 
-* Pass 2: Forward Generation.
-
-The engine executes from top to bottom. Because all constraints were negotiated in Pass 1, the physical grids, parameters, and CoT text strings are guaranteed to stitch together perfectly without throwing errors or creating unsolvable states.
 
 ## Example
 
@@ -86,10 +159,12 @@ The engine executes from top to bottom. Because all constraints were negotiated 
 
 Adding a new transformation is as simple as inheriting from the base `ARCTransformation` class. You only need to define three things:
 
-`register_variables_and_constraints(cls)`: define internal parameters and constraints that have to be satisfied.
+`register_variables_and_constraints(cls, **kwargs)`: define internal parameters and constraints that have to be satisfied.
 
 `__init__()`: accepts parameters that fully determine transformation behavior.
 
 `execute()`: The deterministic matrix logic (e.g., NumPy array manipulation).
 
 `describe()`: The parameterized text template explaining what the execute step just did.
+
+You can also define new object types, geometry types and criteria.

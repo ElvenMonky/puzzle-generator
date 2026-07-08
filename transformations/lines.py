@@ -12,8 +12,8 @@ class AddLines(ARCTransformation):
     }
 
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
 
         key = Line.__name__
         count = Int(f"{id}_{key}_count")
@@ -58,8 +58,8 @@ class SplitByLine(Split):
     }
 
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
         
         direction = Int(f"{id}_param_direction")
         start = Int(f"{id}_param_start")

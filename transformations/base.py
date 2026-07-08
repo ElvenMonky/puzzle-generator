@@ -43,7 +43,7 @@ class ARCTransformation:
         features |= cls.config.keys()
 
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
         # 1. Base geometric constraints
         for prop in ["width", "height"]:
             for i in range(cls.in_count):
@@ -54,7 +54,7 @@ class ARCTransformation:
                 solver.add(var >= 1, var <= MAX_SIZE)
         
         # 2. Feature state constraints
-        for key in features:
+        for key in feature_types:
             config = cls.config.get(key, {})
             
             # --- INPUT SLOTS ---
@@ -106,8 +106,8 @@ class CreateCanvas(ARCTransformation):
     in_count = 0
 
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
 
         background = Int(f"background")
         
@@ -118,11 +118,20 @@ class Dummy(ARCTransformation):
     Transformation that does nothing
     """
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
 
         in_w, out_w = Int(f"{id}_in_0_width"), Int(f"{id}_out_0_width")
         in_h, out_h = Int(f"{id}_in_0_height"), Int(f"{id}_out_0_height")
         
         solver.add(in_w == out_w)
         solver.add(in_h == out_h)
+
+        out_indices: dict[int, int] = {}
+        for in_wire, index, out_wire in feature_slots:
+            out_index = out_indices.get(out_wire, -1) + 1
+            out_indices[out_wire] = out_index
+            for prop in ["type", "x", "y", "width", "height", "color", "mask"]:
+                in_var = Int(f"{id}_in_{in_wire}_{index}_{prop}")
+                out_var = Int(f"{id}_out_{out_wire}_{out_index}_{prop}")
+                solver.add(in_var == out_var)

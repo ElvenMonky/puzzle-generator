@@ -3,8 +3,8 @@ from transformations.base import ARCTransformation, MAX_SIZE
 
 class BaseUpscale(ARCTransformation):
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
 
         in_w, out_w, scale_w = Int(f"{id}_in_0_width"), Int(f"{id}_out_0_width"), Int(f"{id}_param_w_scale")
         in_h, out_h, scale_h = Int(f"{id}_in_0_height"), Int(f"{id}_out_0_height"), Int(f"{id}_param_h_scale")
@@ -23,8 +23,8 @@ class Upscale(BaseUpscale):
 class Merge(ARCTransformation):
     in_count = 2
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
         
         in_w0, in_w1, out_w = Int(f"{id}_in_0_width"), Int(f"{id}_in_1_width"), Int(f"{id}_out_0_width")
         in_h0, in_h1, out_h = Int(f"{id}_in_0_height"), Int(f"{id}_in_1_height"), Int(f"{id}_out_0_height")
@@ -35,8 +35,8 @@ class Merge(ARCTransformation):
 class Split(ARCTransformation):
     out_count = 2
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
         
         direction = Int(f"{id}_param_direction")
         start = Int(f"{id}_param_start")
@@ -61,8 +61,8 @@ class Split(ARCTransformation):
 
 class Rotate90(ARCTransformation):
     @classmethod
-    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, features: set[str], feature_ids: list[str]):
-        super().register_variables_and_constraints(solver, id, pre_phase, features, feature_ids)
+    def register_variables_and_constraints(cls, solver: Solver, id: str, pre_phase: bool, feature_types: set[str], feature_slots: list[tuple[int, int, int]]):
+        super().register_variables_and_constraints(solver, id, pre_phase, feature_types, feature_slots)
         
         in_w, out_w = Int(f"{id}_in_0_width"), Int(f"{id}_out_0_width")
         in_h, out_h = Int(f"{id}_in_0_height"), Int(f"{id}_out_0_height")

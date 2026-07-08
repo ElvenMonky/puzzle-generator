@@ -1,13 +1,12 @@
 from time import time
 from skeleton import Skeleton
-from criteria.base import PositionCriteria
 
 # Mock Skeleton definition
 skeleton = Skeleton(2, [
   { "type": "CreateCanvas", "in": [] },
-  { "type": "AddLines", "in": [0], "feature_ids": ["line_0"] },
-  { "type": "Rotate90", "in": [1], "feature_ids": ["line_0"] },
-  { "type": "Split", "in": [2], "criteria": [PositionCriteria.__name__], "feature_ids": ["line_0"] },
+  { "type": "AddLines", "in": [0], "features": [(-1, 0, 0, 1)] },
+  { "type": "Rotate90", "in": [1], "features": [(0, 0, 0, 0)] },
+  { "type": "Split", "in": [2], "features": [(0, 0, -1, 2)] },
   { "type": "Rotate90", "in": [(3, 1)] },
   { "type": "Tile", "in": [4] },
   { "type": "Upscale", "in": [3] },
