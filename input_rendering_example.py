@@ -569,8 +569,7 @@ class PuzzleGen:
         for layer_spec, root_group in layer_groups:
             layers_geoms.append({
                 "type": "Geometry",
-                "x": 0, "y": 0,
-                "dir": roll_range(layer_spec["dir"]) if "dir" in layer_spec else 0,
+                "x": 0, "y": 0, "dir": 0,
                 "color": roll_range(layer_spec["color"]) if "color" in layer_spec else -1,
                 "geometries": root_group.extract_geometries(model)
             })
