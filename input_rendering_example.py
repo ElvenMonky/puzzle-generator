@@ -176,6 +176,10 @@ class GroupPlacement:
         self.px, self.py, self.pw, self.ph = parent_bounds
         self.inherited_color = inherited_color
 
+        # Pattern (optional) – list of per‑instance overrides, cycled
+        self.pattern = spec.get("pattern", None)
+
+        # Count
         count_spec = spec.get("count", 1)
         self.min_count, self.max_count, self.step_count = parse_range(count_spec)
         self.count_var = Int(f"cnt_{ctx.var}"); ctx.var += 1
@@ -190,15 +194,36 @@ class GroupPlacement:
         else:
             self.resolved_color = inherited_color
 
-        type_val = spec.get("type", "Geometry")
-        if isinstance(type_val, list):
-            self.instance_types = [random.choice(type_val) for _ in range(self.max_count)]
-        else:
-            self.instance_types = [type_val] * self.max_count
+        # Build per‑instance types, sizes, colors based on pattern or base spec
+        base_type = spec.get("type", "Geometry")
+        base_size = spec.get("size", {})
+        base_color = spec.get("color")   # may be None (inherit)
 
-        size_spec = spec.get("size", {})
+        self.instance_types = []
+        self.instance_size_specs = []
+        self.instance_colors = []   # resolved later at extraction time
 
         for i in range(self.max_count):
+            if self.pattern:
+                pat = self.pattern[i % len(self.pattern)]
+                inst_type = pat.get("type", base_type)
+                if isinstance(inst_type, list):
+                    inst_type = random.choice(inst_type)
+                inst_size = pat.get("size", base_size)
+                inst_color = pat.get("color", base_color)
+            else:
+                if isinstance(base_type, list):
+                    inst_type = random.choice(base_type)
+                else:
+                    inst_type = base_type
+                inst_size = base_size
+                inst_color = base_color
+
+            self.instance_types.append(inst_type)
+            self.instance_size_specs.append(inst_size)
+            self.instance_colors.append(inst_color)
+
+            # Z3 variables
             x = Int(f"x_{ctx.var}"); ctx.var += 1
             y = Int(f"y_{ctx.var}"); ctx.var += 1
             w = Int(f"w_{ctx.var}"); ctx.var += 1
@@ -224,33 +249,47 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size / default 1x1 for Point
+        # Apply size constraints per instance (using inst_size)
         for i in range(self.max_count):
             w_var = self.instances[i].w
             h_var = self.instances[i].h
             typ = self.instance_types[i]
+            sz = self.instance_size_specs[i]
 
-            if typ == "Point" and not size_spec:
+            if typ == "Point" and not sz:
                 solver.add(Implies(i < self.count_var, And(w_var == 1, h_var == 1)))
-            elif size_spec:
+            elif sz:
                 c = []
-                if "width" in size_spec:
-                    c.append(range_expr(w_var, size_spec["width"]))
-                if "height" in size_spec:
-                    c.append(range_expr(h_var, size_spec["height"]))
-                if "min" in size_spec or "max" in size_spec:
-                    min_spec = size_spec.get("min", [1, 1])
-                    max_spec = size_spec.get("max", min_spec)
+                if "width" in sz:
+                    c.append(range_expr(w_var, sz["width"]))
+                if "height" in sz:
+                    c.append(range_expr(h_var, sz["height"]))
+                if "min" in sz or "max" in sz:
+                    min_spec = sz.get("min", [1, 1])
+                    max_spec = sz.get("max", min_spec)
                     c.append(If(w_var <= h_var,
                                 And(range_expr(w_var, min_spec), range_expr(h_var, max_spec)),
                                 And(range_expr(h_var, min_spec), range_expr(w_var, max_spec))))
+                # Ratio constraint (longer / shorter)
+                if "ratio" in sz:
+                    ratio_spec = sz["ratio"]
+                    r_min, r_max, _ = parse_range(ratio_spec)
+                    longer = If(w_var > h_var, w_var, h_var)
+                    shorter = If(w_var > h_var, h_var, w_var)
+                    c.append(And(longer >= shorter * r_min,
+                                 longer <= shorter * r_max))
+                # Area constraint
+                if "area" in sz:
+                    area_spec = sz["area"]
+                    a_min, a_max, _ = parse_range(area_spec)
+                    c.append(And(w_var * h_var >= a_min,
+                                 w_var * h_var <= a_max))
                 if c:
                     solver.add(Implies(i < self.count_var, And(c)))
 
         self._add_strategy_constraints()
 
     def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
-        """Add adjacency constraints between instance i and instance j."""
         adj = []
         a = insts[j]
         b = insts[i]
@@ -264,18 +303,14 @@ class GroupPlacement:
             adj.append(And(cond, a.y == b.y + b.h + lvar,
                         a.x < b.x + b.w, b.x < a.x + a.w))
         if "Diagonal" in allowed_types:
-            # 1. Child down‑right (↘) : child.top-left = parent.bottom-right + (lvar, lvar)
             adj.append(And(cond, b.x == a.x + a.w + lvar,
-                        b.y == a.y + a.h + lvar))
-            # 2. Child down‑left  (↙) : child.top-right = parent.bottom-left + (-lvar, lvar)
+                       b.y == a.y + a.h + lvar))
             adj.append(And(cond, b.x + b.w == a.x - lvar,
-                        b.y == a.y + a.h + lvar))
-            # 3. Child up‑left    (↖) : child.bottom-right = parent.top-left + (-lvar, -lvar)
+                       b.y == a.y + a.h + lvar))
             adj.append(And(cond, a.x == b.x + b.w + lvar,
-                        a.y == b.y + b.h + lvar))
-            # 4. Child up‑right   (↗) : child.bottom-left = parent.top-right + (lvar, -lvar)
+                       a.y == b.y + b.h + lvar))
             adj.append(And(cond, b.x == a.x + a.w + lvar,
-                        b.y + b.h == a.y - lvar))
+                       b.y + b.h == a.y - lvar))
         return adj
 
     def _add_strategy_constraints(self):
@@ -363,7 +398,10 @@ class GroupPlacement:
             ih = model[inst.h].as_long()
             typ = self.instance_types[i]
 
-            if "color" in spec:
+            # Resolve color: instance override, group color, or inherited
+            if self.instance_colors[i] is not None:
+                color = roll_range(self.instance_colors[i])
+            elif "color" in spec:
                 color = roll_range(spec["color"])
             else:
                 color = roll_range(self.inherited_color) if self.inherited_color is not None else -1
@@ -441,54 +479,52 @@ class GroupPlacement:
                 pw = model[parent.w].as_long()
                 ph = model[parent.h].as_long()
 
-                # ---- Orthogonal Links ----
                 if "Line" in allowed_types:
                     # right of parent
                     if cx == px + pw + link_len and cy + ch > py and py + ph > cy:
                         start_y = max(cy, py) + (min(cy + ch, py + ph) - max(cy, py)) // 2
                         geoms.append({"type": "Line", "x": px + pw, "y": start_y,
-                                    "length": link_len, "dir": 0, "color": link_color})
+                                      "length": link_len, "dir": 0, "color": link_color})
                         found = True; break
                     # left of parent
                     if px == cx + cw + link_len and cy + ch > py and py + ph > cy:
                         start_y = max(cy, py) + (min(cy + ch, py + ph) - max(cy, py)) // 2
                         geoms.append({"type": "Line", "x": px - 1, "y": start_y,
-                                    "length": link_len, "dir": 2, "color": link_color})
+                                      "length": link_len, "dir": 2, "color": link_color})
                         found = True; break
                     # below parent
                     if cy == py + ph + link_len and cx + cw > px and px + pw > cx:
                         start_x = max(cx, px) + (min(cx + cw, px + pw) - max(cx, px)) // 2
                         geoms.append({"type": "Line", "x": start_x, "y": py + ph,
-                                    "length": link_len, "dir": 1, "color": link_color})
+                                      "length": link_len, "dir": 1, "color": link_color})
                         found = True; break
                     # above parent
                     if py == cy + ch + link_len and cx + cw > px and px + pw > cx:
                         start_x = max(cx, px) + (min(cx + cw, px + pw) - max(cx, px)) // 2
                         geoms.append({"type": "Line", "x": start_x, "y": py - 1,
-                                    "length": link_len, "dir": 3, "color": link_color})
+                                      "length": link_len, "dir": 3, "color": link_color})
                         found = True; break
 
-                # ---- Diagonal Links ----
                 if "Diagonal" in allowed_types and not found:
-                    # 1. Child down‑right (↘) : start at parent bottom‑right outside corner
+                    # child down‑right (↘)
                     if cx == px + pw + link_len and cy == py + ph + link_len:
                         geoms.append({"type": "Diagonal", "x": px + pw, "y": py + ph,
-                                    "length": link_len, "dir": 0, "color": link_color})
+                                      "length": link_len, "dir": 0, "color": link_color})
                         found = True; break
-                    # 2. Child down‑left (↙) : start at parent bottom‑left outside corner
+                    # child down‑left (↙)
                     if cx + cw == px - link_len and cy == py + ph + link_len:
                         geoms.append({"type": "Diagonal", "x": px - 1, "y": py + ph,
-                                    "length": link_len, "dir": 1, "color": link_color})
+                                      "length": link_len, "dir": 1, "color": link_color})
                         found = True; break
-                    # 3. Child up‑left (↖) : start at parent top‑left outside corner
+                    # child up‑left (↖)
                     if px == cx + cw + link_len and py == cy + ch + link_len:
                         geoms.append({"type": "Diagonal", "x": px - 1, "y": py - 1,
-                                    "length": link_len, "dir": 2, "color": link_color})
+                                      "length": link_len, "dir": 2, "color": link_color})
                         found = True; break
-                    # 4. Child up‑right (↗) : start at parent top‑right outside corner
+                    # child up‑right (↗)
                     if cx == px + pw + link_len and cy + ch == py - link_len:
                         geoms.append({"type": "Diagonal", "x": px + pw, "y": py - 1,
-                                    "length": link_len, "dir": 3, "color": link_color})
+                                      "length": link_len, "dir": 3, "color": link_color})
                         found = True; break
         return geoms
 
@@ -595,24 +631,27 @@ if __name__ == "__main__":
                 ]
             },
             {
-                "count": 25,
-                "gap": 2,
-                "size": {"width": [1, 3], "height": [2, 5]},
-                "strategy": "flow",
-                "type": "Rectangle"
-            },
-            {
                 "color": 9,
-                "count": 9,
-                "gap": 1,
-                "size": {"width": [2, 2], "height": [2, 2]},
-                "strategy": "tree",
-                "link": {
-                    "types": ["Line", "Diagonal"],
-                    "length": [2, 3],
-                    "color": 5,
+                "count": 8,
+                "gap": 2,
+                "size": {
+                    "width": [2, 8],
+                    "height": [2, 8],
+                    "ratio": [1, 2],
+                    "area": [8, 32]
                 },
-                "type": "Rectangle"
+                "strategy": "chain",
+                "link": {
+                    "type": "Line",
+                    "length": [1, 3],
+                    "color": 5
+                },
+                "type": "Rectangle",
+                "pattern": [
+                    {"color": 3, "size": {"width":2,"height":2} },
+                    {"color": 4},
+                    {"type": "Point", "size": {"width":1,"height":1} }
+                ]
             }
         ]
     }
