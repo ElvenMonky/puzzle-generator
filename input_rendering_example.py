@@ -161,15 +161,16 @@ def range_expr(var, spec):
 # 4. Z3-BASED GROUP PLACEMENT ENGINE
 # ==========================================
 class Instance:
-    def __init__(self, x, y, w, h):
-        self.x = x; self.y = y; self.w = w; self.h = h
+    def __init__(self, x, y, ox, oy, w, h, d):
+        self.x = x; self.y = y; self.d = d
+        self.ox = ox; self.oy = oy; self.w = w; self.h = h
 
 class GeneratorContext:
     def __init__(self):
         self.var = 0
 
 class GroupPlacement:
-    def __init__(self, spec, parent_bounds, solver, ctx, inherited_color=None):
+    def __init__(self, spec, parent_bounds, solver, ctx, inherited_color=-1):
         self.spec = spec
         self.solver = solver
         self.ctx = ctx
@@ -189,10 +190,7 @@ class GroupPlacement:
         self.child_groups = []
         self.link_vars = []
 
-        if "color" in spec:
-            self.resolved_color = spec["color"]
-        else:
-            self.resolved_color = inherited_color
+        self.resolved_color = spec["color"] if "color" in spec else inherited_color
 
         # Build per‑instance types, sizes, colors based on pattern or base spec
         base_type = spec.get("type", "Geometry")
@@ -226,24 +224,32 @@ class GroupPlacement:
             # Z3 variables
             x = Int(f"x_{ctx.var}"); ctx.var += 1
             y = Int(f"y_{ctx.var}"); ctx.var += 1
+            d = Int(f"d_{ctx.var}"); ctx.var += 1
+            ox = Int(f"ox_{ctx.var}"); ctx.var += 1
+            oy = Int(f"oy_{ctx.var}"); ctx.var += 1
             w = Int(f"w_{ctx.var}"); ctx.var += 1
             h = Int(f"h_{ctx.var}"); ctx.var += 1
 
             active = i < self.count_var
             solver.add(If(active,
-                          And(x >= self.px, y >= self.py,
-                              x + w <= self.px + self.pw,
-                              y + h <= self.py + self.ph,
-                              w >= 1, h >= 1),
-                          And(x == 0, y == 0, w == 0, h == 0)))
+                          And(ox <= 0, ox > -w,
+                              oy <= 0, oy > -h,
+                              w >= 1, h >= 1,
+                              d >= 0, d <=7,
+                              # depend on direction d
+                              x + ox >= self.px,
+                              y + oy >= self.py,
+                              x + ox + w <= self.px + self.pw,
+                              y + oy + h <= self.py + self.ph),
+                          And(ox == 0, oy == 0, x == 0, y == 0, w == 0, h == 0, d == 0)))
 
-            inst = Instance(x, y, w, h)
+            inst = Instance(x, y, d, ox, oy, w, h)
             self.instances.append(inst)
 
             child_list = []
             for child_spec in spec.get("geometries", []):
                 child = GroupPlacement(child_spec,
-                                       parent_bounds=(x, y, w, h),
+                                       parent_bounds=(ox, oy, w, h),
                                        solver=solver, ctx=ctx,
                                        inherited_color=self.resolved_color)
                 child_list.append(child)
@@ -385,77 +391,60 @@ class GroupPlacement:
                         adj.extend(self._add_link_options(i, j, cond, lvar, allowed_types, insts))
                     self.solver.add(Implies(i < cnt, Or(adj)))
 
-    def extract_geometries(self, model, offset_x=0, offset_y=0):
+    def extract_geometries(self, model):
         spec = self.spec
         count_val = model[self.count_var].as_long()
         result = []
 
         for i in range(count_val):
             inst = self.instances[i]
-            ix = model[inst.x].as_long()
-            iy = model[inst.y].as_long()
-            iw = model[inst.w].as_long()
-            ih = model[inst.h].as_long()
+            x = model[inst.x].as_long()
+            y = model[inst.y].as_long()
+            dir = model[inst.d].as_long()
+            ox = model[inst.ox].as_long()
+            oy = model[inst.oy].as_long()
+            w = model[inst.w].as_long()
+            h = model[inst.h].as_long()
             typ = self.instance_types[i]
 
             # Resolve color: instance override, group color, or inherited
             if self.instance_colors[i] is not None:
                 color = roll_range(self.instance_colors[i])
-            elif "color" in spec:
-                color = roll_range(spec["color"])
             else:
-                color = roll_range(self.inherited_color) if self.inherited_color is not None else -1
+                color = roll_range(spec["color"] if "color" in spec else self.inherited_color)
 
+            item = {
+                "type": "Polygon",
+                "x": x,
+                "y": y,
+                "dir": dir,
+                "color": color,
+                "geometries": []
+            }
             if typ == "Rectangle":
-                x = ix - offset_x
-                y = iy - offset_y
-                result.append({
-                    "type": "Polygon",
-                    "vertices": [[x, y], [x + iw - 1, y], [x + iw - 1, y + ih - 1], [x, y + ih - 1]],
-                    "color": color
-                })
-            elif typ == "Point":
-                result.append({"type": "Point", "x": ix - offset_x, "y": iy - offset_y, "color": color})
-            elif typ == "Line":
-                result.append({"type": "Line", "x": ix - offset_x, "y": iy - offset_y,
-                               "length": iw, "dir": 0, "color": color})
+                item["vertices"] = [[ox, oy], [ox + w - 1, oy], [ox + w - 1, oy + h - 1], [ox, oy + h - 1]]
 
-            if self.child_groups[i]:
-                child_list = []
-                for child_group in self.child_groups[i]:
-                    child_list.extend(child_group.extract_geometries(model, offset_x=ix, offset_y=iy))
-                if typ == "Geometry":
-                    result.append({
-                        "type": "Geometry",
-                        "x": ix - offset_x,
-                        "y": iy - offset_y,
-                        "color": color,
-                        "geometries": child_list
-                    })
-                else:
-                    result.extend(child_list)
+            for child_group in self.child_groups[i]:
+                item["geometries"].extend(child_group.extract_geometries(model))
 
+            result.append(item)
         if spec.get("strategy") in ("tree", "chain", "star") and "link" in spec and count_val > 1:
-            link_geoms = self._extract_links(model, count_val, offset_x, offset_y)
+            link_geoms = self._extract_links(model, count_val)
             result.extend(link_geoms)
 
         return result
 
-    def _extract_links(self, model, count_val, offset_x, offset_y):
+    def _extract_links(self, model, count_val):
         geoms = []
-        spec = self.spec
-        link_spec = spec["link"]
-        if "color" in link_spec:
-            link_color = roll_range(link_spec["color"])
-        else:
-            link_color = roll_range(self.resolved_color) if self.resolved_color is not None else -1
+        link_spec = self.spec["link"]
+        link_color = roll_range(link_spec["color"] if "color" in link_spec else self.resolved_color)
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-        strategy = spec.get("strategy")
+        strategy = self.spec.get("strategy")
 
         for i in range(1, count_val):
             child = self.instances[i]
-            cx = model[child.x].as_long() - offset_x
-            cy = model[child.y].as_long() - offset_y
+            cx = model[child.x].as_long()
+            cy = model[child.y].as_long()
             cw = model[child.w].as_long()
             ch = model[child.h].as_long()
             lvar = self.link_vars[i - 1]
@@ -474,8 +463,8 @@ class GroupPlacement:
             for j in parent_indices:
                 if found: break
                 parent = self.instances[j]
-                px = model[parent.x].as_long() - offset_x
-                py = model[parent.y].as_long() - offset_y
+                px = model[parent.x].as_long()
+                py = model[parent.y].as_long()
                 pw = model[parent.w].as_long()
                 ph = model[parent.h].as_long()
 
