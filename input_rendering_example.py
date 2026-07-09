@@ -249,6 +249,35 @@ class GroupPlacement:
 
         self._add_strategy_constraints()
 
+    def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
+        """Add adjacency constraints between instance i and instance j."""
+        adj = []
+        a = insts[j]
+        b = insts[i]
+        if "Line" in allowed_types:
+            adj.append(And(cond, b.x == a.x + a.w + lvar,
+                        a.y < b.y + b.h, b.y < a.y + a.h))
+            adj.append(And(cond, a.x == b.x + b.w + lvar,
+                        a.y < b.y + b.h, b.y < a.y + a.h))
+            adj.append(And(cond, b.y == a.y + a.h + lvar,
+                        a.x < b.x + b.w, b.x < a.x + a.w))
+            adj.append(And(cond, a.y == b.y + b.h + lvar,
+                        a.x < b.x + b.w, b.x < a.x + a.w))
+        if "Diagonal" in allowed_types:
+            # 1. Child down‑right (↘) : child.top-left = parent.bottom-right + (lvar, lvar)
+            adj.append(And(cond, b.x == a.x + a.w + lvar,
+                        b.y == a.y + a.h + lvar))
+            # 2. Child down‑left  (↙) : child.top-right = parent.bottom-left + (-lvar, lvar)
+            adj.append(And(cond, b.x + b.w == a.x - lvar,
+                        b.y == a.y + a.h + lvar))
+            # 3. Child up‑left    (↖) : child.bottom-right = parent.top-left + (-lvar, -lvar)
+            adj.append(And(cond, a.x == b.x + b.w + lvar,
+                        a.y == b.y + b.h + lvar))
+            # 4. Child up‑right   (↗) : child.bottom-left = parent.top-right + (lvar, -lvar)
+            adj.append(And(cond, b.x == a.x + a.w + lvar,
+                        b.y + b.h == a.y - lvar))
+        return adj
+
     def _add_strategy_constraints(self):
         strategy = self.spec.get("strategy", "random")
         gap = self.spec.get("gap", 0)
@@ -256,7 +285,7 @@ class GroupPlacement:
         cnt = self.count_var
         insts = self.instances
 
-        if strategy == "random":
+        if strategy in ("random", "tree", "chain", "star"):
             for i in range(max_n):
                 for j in range(i + 1, max_n):
                     a, b = insts[i], insts[j]
@@ -266,6 +295,9 @@ class GroupPlacement:
                                    b.x + b.w + gap <= a.x,
                                    a.y + a.h + gap <= b.y,
                                    b.y + b.h + gap <= a.y)))
+
+        if strategy == "random":
+            pass
 
         elif strategy == "row":
             for i in range(max_n):
@@ -279,16 +311,11 @@ class GroupPlacement:
                 self.solver.add(Implies(i < cnt, insts[i].x + insts[i].w <= self.px + self.pw))
 
         elif strategy == "flow":
-            # uniform row height – all items ≤ row_height
             row_height = Int(f"rowh_{self.ctx.var}"); self.ctx.var += 1
             self.solver.add(row_height >= 0)
             for i in range(max_n):
                 self.solver.add(Implies(i < cnt, insts[i].h <= row_height))
-
-            # first item at top-left
             self.solver.add(Implies(0 < cnt, And(insts[0].x == self.px, insts[0].y == self.py)))
-
-            # subsequent items: wrap if they would overflow the right edge
             for i in range(1, max_n):
                 a = insts[i-1]; b = insts[i]
                 fits = (a.x + a.w + gap + b.w <= self.px + self.pw)
@@ -298,12 +325,10 @@ class GroupPlacement:
                 self.solver.add(
                     Implies(And((i-1) < cnt, i < cnt),
                             b.y == If(fits, a.y, a.y + row_height + gap)))
-
-            # no row overflows parent height
             for i in range(max_n):
                 self.solver.add(Implies(i < cnt, insts[i].y + row_height <= self.py + self.ph))
 
-        elif strategy == "tree":
+        elif strategy in ("tree", "chain", "star"):
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
@@ -311,29 +336,18 @@ class GroupPlacement:
                     lvar = Int(f"link_{self.ctx.var}"); self.ctx.var += 1
                     self.link_vars.append(lvar)
                     self.solver.add(Implies(i < cnt, range_expr(lvar, link_spec["length"])))
+
+                    if strategy == "tree":
+                        parent_indices = range(i)
+                    elif strategy == "chain":
+                        parent_indices = [i - 1]
+                    elif strategy == "star":
+                        parent_indices = [0]
+
                     adj = []
-                    b = insts[i]
-                    for j in range(i):
-                        a = insts[j]
-                        cond = And(i < cnt, j < cnt)
-                        if "Line" in allowed_types:
-                            adj.append(And(cond, b.x == a.x + a.w + lvar,
-                                           a.y < b.y + b.h, b.y < a.y + a.h))
-                            adj.append(And(cond, a.x == b.x + b.w + lvar,
-                                           a.y < b.y + b.h, b.y < a.y + a.h))
-                            adj.append(And(cond, b.y == a.y + a.h + lvar,
-                                           a.x < b.x + b.w, b.x < a.x + a.w))
-                            adj.append(And(cond, a.y == b.y + b.h + lvar,
-                                           a.x < b.x + b.w, b.x < a.x + a.w))
-                        if "Diagonal" in allowed_types:
-                            adj.append(And(cond, b.x == a.x + a.w + lvar,
-                                           b.y == a.y + a.h + lvar))
-                            adj.append(And(cond, a.x == b.x + b.w + lvar,
-                                           a.y == b.y + b.h + lvar))
-                            adj.append(And(cond, b.x + b.w == a.x + lvar,
-                                           b.y == a.y + a.h + lvar))
-                            adj.append(And(cond, b.x == a.x + a.w - lvar,
-                                           b.y + b.h == a.y + lvar))
+                    for j in parent_indices:
+                        cond = And(j < cnt, i < cnt)
+                        adj.extend(self._add_link_options(i, j, cond, lvar, allowed_types, insts))
                     self.solver.add(Implies(i < cnt, Or(adj)))
 
     def extract_geometries(self, model, offset_x=0, offset_y=0):
@@ -383,7 +397,7 @@ class GroupPlacement:
                 else:
                     result.extend(child_list)
 
-        if spec.get("strategy") == "tree" and "link" in spec and count_val > 1:
+        if spec.get("strategy") in ("tree", "chain", "star") and "link" in spec and count_val > 1:
             link_geoms = self._extract_links(model, count_val, offset_x, offset_y)
             result.extend(link_geoms)
 
@@ -398,6 +412,8 @@ class GroupPlacement:
         else:
             link_color = roll_range(self.resolved_color) if self.resolved_color is not None else -1
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
+        strategy = spec.get("strategy")
+
         for i in range(1, count_val):
             child = self.instances[i]
             cx = model[child.x].as_long() - offset_x
@@ -407,7 +423,17 @@ class GroupPlacement:
             lvar = self.link_vars[i - 1]
             link_len = model[lvar].as_long()
             found = False
-            for j in range(i):
+
+            if strategy == "tree":
+                parent_indices = list(range(i))
+            elif strategy == "chain":
+                parent_indices = [i - 1]
+            elif strategy == "star":
+                parent_indices = [0]
+            else:
+                continue
+
+            for j in parent_indices:
                 if found: break
                 parent = self.instances[j]
                 px = model[parent.x].as_long() - offset_x
@@ -415,48 +441,54 @@ class GroupPlacement:
                 pw = model[parent.w].as_long()
                 ph = model[parent.h].as_long()
 
+                # ---- Orthogonal Links ----
                 if "Line" in allowed_types:
+                    # right of parent
                     if cx == px + pw + link_len and cy + ch > py and py + ph > cy:
-                        start_x = px + pw
                         start_y = max(cy, py) + (min(cy + ch, py + ph) - max(cy, py)) // 2
-                        geoms.append({"type": "Line", "x": start_x, "y": start_y,
-                                      "length": link_len, "dir": 0, "color": link_color})
+                        geoms.append({"type": "Line", "x": px + pw, "y": start_y,
+                                    "length": link_len, "dir": 0, "color": link_color})
                         found = True; break
+                    # left of parent
                     if px == cx + cw + link_len and cy + ch > py and py + ph > cy:
-                        start_x = cx + cw
                         start_y = max(cy, py) + (min(cy + ch, py + ph) - max(cy, py)) // 2
-                        geoms.append({"type": "Line", "x": start_x, "y": start_y,
-                                      "length": link_len, "dir": 0, "color": link_color})
+                        geoms.append({"type": "Line", "x": px - 1, "y": start_y,
+                                    "length": link_len, "dir": 2, "color": link_color})
                         found = True; break
+                    # below parent
                     if cy == py + ph + link_len and cx + cw > px and px + pw > cx:
                         start_x = max(cx, px) + (min(cx + cw, px + pw) - max(cx, px)) // 2
-                        start_y = py + ph
-                        geoms.append({"type": "Line", "x": start_x, "y": start_y,
-                                      "length": link_len, "dir": 1, "color": link_color})
+                        geoms.append({"type": "Line", "x": start_x, "y": py + ph,
+                                    "length": link_len, "dir": 1, "color": link_color})
                         found = True; break
+                    # above parent
                     if py == cy + ch + link_len and cx + cw > px and px + pw > cx:
                         start_x = max(cx, px) + (min(cx + cw, px + pw) - max(cx, px)) // 2
-                        start_y = cy + ch
-                        geoms.append({"type": "Line", "x": start_x, "y": start_y,
-                                      "length": link_len, "dir": 1, "color": link_color})
+                        geoms.append({"type": "Line", "x": start_x, "y": py - 1,
+                                    "length": link_len, "dir": 3, "color": link_color})
                         found = True; break
 
+                # ---- Diagonal Links ----
                 if "Diagonal" in allowed_types and not found:
+                    # 1. Child down‑right (↘) : start at parent bottom‑right outside corner
                     if cx == px + pw + link_len and cy == py + ph + link_len:
                         geoms.append({"type": "Diagonal", "x": px + pw, "y": py + ph,
-                                      "length": link_len, "dir": 0, "color": link_color})
+                                    "length": link_len, "dir": 0, "color": link_color})
                         found = True; break
+                    # 2. Child down‑left (↙) : start at parent bottom‑left outside corner
+                    if cx + cw == px - link_len and cy == py + ph + link_len:
+                        geoms.append({"type": "Diagonal", "x": px - 1, "y": py + ph,
+                                    "length": link_len, "dir": 1, "color": link_color})
+                        found = True; break
+                    # 3. Child up‑left (↖) : start at parent top‑left outside corner
                     if px == cx + cw + link_len and py == cy + ch + link_len:
-                        geoms.append({"type": "Diagonal", "x": cx + cw, "y": cy + ch,
-                                      "length": link_len, "dir": 0, "color": link_color})
+                        geoms.append({"type": "Diagonal", "x": px - 1, "y": py - 1,
+                                    "length": link_len, "dir": 2, "color": link_color})
                         found = True; break
-                    if cx + cw == px + link_len and cy == py + ph + link_len:
-                        geoms.append({"type": "Diagonal", "x": px, "y": py + ph,
-                                      "length": link_len, "dir": 0, "color": link_color})
-                        found = True; break
-                    if cx == px + pw - link_len and cy + ch == py + link_len:
-                        geoms.append({"type": "Diagonal", "x": px + pw, "y": py,
-                                      "length": link_len, "dir": 1, "color": link_color})
+                    # 4. Child up‑right (↗) : start at parent top‑right outside corner
+                    if cx == px + pw + link_len and cy + ch == py - link_len:
+                        geoms.append({"type": "Diagonal", "x": px + pw, "y": py - 1,
+                                    "length": link_len, "dir": 3, "color": link_color})
                         found = True; break
         return geoms
 
@@ -538,7 +570,7 @@ if __name__ == "__main__":
         "layers": [
             {
                 "color": 1,
-                "count": [2, 5],
+                "count": 0,
                 "gap": 2,
                 "size": {"min": [3, 9], "max": [7, 15]},
                 "strategy": "random",
@@ -563,11 +595,23 @@ if __name__ == "__main__":
                 ]
             },
             {
-                "color": 3,
                 "count": 25,
                 "gap": 2,
                 "size": {"width": [1, 3], "height": [2, 5]},
                 "strategy": "flow",
+                "type": "Rectangle"
+            },
+            {
+                "color": 9,
+                "count": 9,
+                "gap": 1,
+                "size": {"width": [2, 2], "height": [2, 2]},
+                "strategy": "tree",
+                "link": {
+                    "types": ["Line", "Diagonal"],
+                    "length": [2, 3],
+                    "color": 5,
+                },
                 "type": "Rectangle"
             }
         ]
