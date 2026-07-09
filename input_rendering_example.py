@@ -174,7 +174,6 @@ class GroupPlacement:
         self.solver = solver
         self.ctx = ctx
         self.px, self.py, self.pw, self.ph = parent_bounds
-        # inherited_color may be -1 (transparent), a fixed int, or a range spec
         self.inherited_color = inherited_color
 
         # Determine min/max/step for count
@@ -190,9 +189,18 @@ class GroupPlacement:
 
         # Resolved color for passing to children: own color if present, else inherited
         if "color" in spec:
-            self.resolved_color = spec["color"]   # may be a range or int
+            self.resolved_color = spec["color"]
         else:
             self.resolved_color = inherited_color
+
+        # Multi‑type support: choose a type for each potential instance
+        type_val = spec.get("type", "Geometry")
+        if isinstance(type_val, list):
+            self.instance_types = [random.choice(type_val) for _ in range(self.max_count)]
+        else:
+            self.instance_types = [type_val] * self.max_count
+
+        size_spec = spec.get("size", {})
 
         for i in range(self.max_count):
             x = Int(f"x_{ctx.var}"); ctx.var += 1
@@ -220,12 +228,16 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints
-        size_spec = spec.get("size", {})
-        if size_spec:
-            for i in range(self.max_count):
-                w_var = self.instances[i].w
-                h_var = self.instances[i].h
+        # ---- Size / default 1x1 for Point ----
+        for i in range(self.max_count):
+            w_var = self.instances[i].w
+            h_var = self.instances[i].h
+            typ = self.instance_types[i]
+
+            if typ == "Point" and not size_spec:
+                solver.add(Implies(i < self.count_var,
+                                   And(w_var == 1, h_var == 1)))
+            elif size_spec:
                 c = []
                 if "width" in size_spec:
                     c.append(range_expr(w_var, size_spec["width"]))
@@ -239,11 +251,6 @@ class GroupPlacement:
                                 And(range_expr(h_var, min_spec), range_expr(w_var, max_spec))))
                 if c:
                     solver.add(Implies(i < self.count_var, And(c)))
-
-        if spec["type"] == "Point":
-            for i in range(self.max_count):
-                solver.add(Implies(i < self.count_var,
-                                   And(self.instances[i].w == 1, self.instances[i].h == 1)))
 
         self._add_strategy_constraints()
 
@@ -308,15 +315,16 @@ class GroupPlacement:
             iy = model[inst.y].as_long()
             iw = model[inst.w].as_long()
             ih = model[inst.h].as_long()
-            # Resolve color: own color if present, else inherited
+            typ = self.instance_types[i]   # the chosen type for this instance
+
+            # Resolve color
             if "color" in spec:
                 color = roll_range(spec["color"])
             else:
-                # inherited_color might be a range or an int (like -1)
                 color = roll_range(self.inherited_color) if self.inherited_color is not None else -1
 
             # ---- Own shape ----
-            if spec["type"] == "Rectangle":
+            if typ == "Rectangle":
                 x = ix - offset_x
                 y = iy - offset_y
                 result.append({
@@ -324,19 +332,18 @@ class GroupPlacement:
                     "vertices": [[x, y], [x + iw - 1, y], [x + iw - 1, y + ih - 1], [x, y + ih - 1]],
                     "color": color
                 })
-            elif spec["type"] == "Point":
+            elif typ == "Point":
                 result.append({"type": "Point", "x": ix - offset_x, "y": iy - offset_y, "color": color})
-            elif spec["type"] == "Line":
+            elif typ == "Line":
                 result.append({"type": "Line", "x": ix - offset_x, "y": iy - offset_y,
                                "length": iw, "dir": 0, "color": color})
-            # ... other leaf types
 
             # ---- Children ----
             if self.child_groups[i]:
                 child_list = []
                 for child_group in self.child_groups[i]:
                     child_list.extend(child_group.extract_geometries(model, offset_x=ix, offset_y=iy))
-                if spec["type"] == "Geometry":
+                if typ == "Geometry":
                     result.append({
                         "type": "Geometry",
                         "x": ix - offset_x,
@@ -345,6 +352,7 @@ class GroupPlacement:
                         "geometries": child_list
                     })
                 else:
+                    # For non‑Geometry containers, just append the children (they are placed inside)
                     result.extend(child_list)
 
         # ---- Links ----
@@ -358,7 +366,6 @@ class GroupPlacement:
         geoms = []
         spec = self.spec
         link_spec = spec["link"]
-        # Link color: explicit link.color, else resolved color of this group
         if "color" in link_spec:
             link_color = roll_range(link_spec["color"])
         else:
@@ -428,7 +435,7 @@ class GroupPlacement:
         return geoms
 
 # ==========================================
-# 5. MAIN GENERATOR (multi‑layer)
+# 5. MAIN GENERATOR
 # ==========================================
 class PuzzleGen:
     @staticmethod
@@ -520,7 +527,7 @@ if __name__ == "__main__":
                         },
                         "size": {"min": [3, 5], "max": [3, 9]},
                         "strategy": "tree",
-                        "type": "Rectangle"
+                        "type": ["Rectangle", "Point"]
                     },
                     {
                         "type": "Point",
@@ -567,11 +574,11 @@ if __name__ == "__main__":
     axes[0].imshow(grid_in, cmap=ARC_CMAP, vmin=0, vmax=9)
     axes[0].set_title("Input")
     axes[1].imshow(grid_out, cmap=ARC_CMAP, vmin=0, vmax=9)
-    axes[1].set_title("Output (per-cluster fill)")
+    axes[1].set_title("Output")
     for ax in axes:
         ax.grid(True, color='#555', linewidth=1)
         ax.set_xticks(np.arange(-0.5, exact['width'], 1), [])
         ax.set_yticks(np.arange(-0.5, exact['height'], 1), [])
     plt.tight_layout()
-    plt.savefig("transparent_default.png")
-    print("Done. See transparent_default.png")
+    plt.savefig("mixed_types.png")
+    print("Done. See mixed_types.png")
