@@ -176,10 +176,8 @@ class GroupPlacement:
         self.px, self.py, self.pw, self.ph = parent_bounds
         self.inherited_color = inherited_color
 
-        # Determine min/max/step for count
         count_spec = spec.get("count", 1)
         self.min_count, self.max_count, self.step_count = parse_range(count_spec)
-
         self.count_var = Int(f"cnt_{ctx.var}"); ctx.var += 1
         add_range_constraint(self.count_var, count_spec, solver)
 
@@ -187,13 +185,11 @@ class GroupPlacement:
         self.child_groups = []
         self.link_vars = []
 
-        # Resolved color for passing to children: own color if present, else inherited
         if "color" in spec:
             self.resolved_color = spec["color"]
         else:
             self.resolved_color = inherited_color
 
-        # Multi‑type support: choose a type for each potential instance
         type_val = spec.get("type", "Geometry")
         if isinstance(type_val, list):
             self.instance_types = [random.choice(type_val) for _ in range(self.max_count)]
@@ -228,15 +224,14 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # ---- Size / default 1x1 for Point ----
+        # Size / default 1x1 for Point
         for i in range(self.max_count):
             w_var = self.instances[i].w
             h_var = self.instances[i].h
             typ = self.instance_types[i]
 
             if typ == "Point" and not size_spec:
-                solver.add(Implies(i < self.count_var,
-                                   And(w_var == 1, h_var == 1)))
+                solver.add(Implies(i < self.count_var, And(w_var == 1, h_var == 1)))
             elif size_spec:
                 c = []
                 if "width" in size_spec:
@@ -261,17 +256,54 @@ class GroupPlacement:
         cnt = self.count_var
         insts = self.instances
 
-        for i in range(max_n):
-            for j in range(i + 1, max_n):
-                a, b = insts[i], insts[j]
-                self.solver.add(
-                    Implies(And(i < cnt, j < cnt),
-                            Or(a.x + a.w + gap <= b.x,
-                               b.x + b.w + gap <= a.x,
-                               a.y + a.h + gap <= b.y,
-                               b.y + b.h + gap <= a.y)))
+        if strategy == "random":
+            for i in range(max_n):
+                for j in range(i + 1, max_n):
+                    a, b = insts[i], insts[j]
+                    self.solver.add(
+                        Implies(And(i < cnt, j < cnt),
+                                Or(a.x + a.w + gap <= b.x,
+                                   b.x + b.w + gap <= a.x,
+                                   a.y + a.h + gap <= b.y,
+                                   b.y + b.h + gap <= a.y)))
 
-        if strategy == "tree":
+        elif strategy == "row":
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, insts[i].y == self.py))
+                if i == 0:
+                    self.solver.add(Implies(i < cnt, insts[i].x == self.px))
+                else:
+                    self.solver.add(Implies(i < cnt,
+                                            insts[i].x == insts[i-1].x + insts[i-1].w + gap))
+                self.solver.add(Implies(i < cnt, insts[i].y + insts[i].h <= self.py + self.ph))
+                self.solver.add(Implies(i < cnt, insts[i].x + insts[i].w <= self.px + self.pw))
+
+        elif strategy == "flow":
+            # uniform row height – all items ≤ row_height
+            row_height = Int(f"rowh_{self.ctx.var}"); self.ctx.var += 1
+            self.solver.add(row_height >= 0)
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, insts[i].h <= row_height))
+
+            # first item at top-left
+            self.solver.add(Implies(0 < cnt, And(insts[0].x == self.px, insts[0].y == self.py)))
+
+            # subsequent items: wrap if they would overflow the right edge
+            for i in range(1, max_n):
+                a = insts[i-1]; b = insts[i]
+                fits = (a.x + a.w + gap + b.w <= self.px + self.pw)
+                self.solver.add(
+                    Implies(And((i-1) < cnt, i < cnt),
+                            b.x == If(fits, a.x + a.w + gap, self.px)))
+                self.solver.add(
+                    Implies(And((i-1) < cnt, i < cnt),
+                            b.y == If(fits, a.y, a.y + row_height + gap)))
+
+            # no row overflows parent height
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, insts[i].y + row_height <= self.py + self.ph))
+
+        elif strategy == "tree":
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
@@ -315,15 +347,13 @@ class GroupPlacement:
             iy = model[inst.y].as_long()
             iw = model[inst.w].as_long()
             ih = model[inst.h].as_long()
-            typ = self.instance_types[i]   # the chosen type for this instance
+            typ = self.instance_types[i]
 
-            # Resolve color
             if "color" in spec:
                 color = roll_range(spec["color"])
             else:
                 color = roll_range(self.inherited_color) if self.inherited_color is not None else -1
 
-            # ---- Own shape ----
             if typ == "Rectangle":
                 x = ix - offset_x
                 y = iy - offset_y
@@ -338,7 +368,6 @@ class GroupPlacement:
                 result.append({"type": "Line", "x": ix - offset_x, "y": iy - offset_y,
                                "length": iw, "dir": 0, "color": color})
 
-            # ---- Children ----
             if self.child_groups[i]:
                 child_list = []
                 for child_group in self.child_groups[i]:
@@ -352,10 +381,8 @@ class GroupPlacement:
                         "geometries": child_list
                     })
                 else:
-                    # For non‑Geometry containers, just append the children (they are placed inside)
                     result.extend(child_list)
 
-        # ---- Links ----
         if spec.get("strategy") == "tree" and "link" in spec and count_val > 1:
             link_geoms = self._extract_links(model, count_val, offset_x, offset_y)
             result.extend(link_geoms)
@@ -370,7 +397,6 @@ class GroupPlacement:
             link_color = roll_range(link_spec["color"])
         else:
             link_color = roll_range(self.resolved_color) if self.resolved_color is not None else -1
-
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
         for i in range(1, count_val):
             child = self.instances[i]
@@ -537,11 +563,12 @@ if __name__ == "__main__":
                 ]
             },
             {
-                "count": 5,
-                "gap": 1,
-                "size": {"width": [1, 1], "height": [1, 1]},
-                "strategy": "random",
-                "type": "Point"
+                "color": 3,
+                "count": 25,
+                "gap": 2,
+                "size": {"width": [1, 3], "height": [2, 5]},
+                "strategy": "flow",
+                "type": "Rectangle"
             }
         ]
     }
@@ -570,7 +597,7 @@ if __name__ == "__main__":
 
     grid_out = Canvas.parse_canvas(exact).render()
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     axes[0].imshow(grid_in, cmap=ARC_CMAP, vmin=0, vmax=9)
     axes[0].set_title("Input")
     axes[1].imshow(grid_out, cmap=ARC_CMAP, vmin=0, vmax=9)
@@ -580,5 +607,5 @@ if __name__ == "__main__":
         ax.set_xticks(np.arange(-0.5, exact['width'], 1), [])
         ax.set_yticks(np.arange(-0.5, exact['height'], 1), [])
     plt.tight_layout()
-    plt.savefig("mixed_types.png")
-    print("Done. See mixed_types.png")
+    plt.savefig("rendering_example.png")
+    print("Done. See rendering_example.png")
