@@ -641,6 +641,7 @@ if __name__ == "__main__":
             {
                 "color": 1,
                 "count": [2, 5],
+                "dir": 0,
                 "gap": 2,
                 "size": {"min": [3, 9], "max": [7, 15]},
                 "strategy": "random",
@@ -649,13 +650,15 @@ if __name__ == "__main__":
                     {
                         "count": [2, 9],
                         "gap": 1,
+                        "dir": 0,
                         "link": {
                             "types": ["Line", "Diagonal"],
-                            "length": [1, 3]
+                            "length": [1, 3],
+                            "color": 2
                         },
-                        "size": {"min": [3, 5], "max": [3, 9]},
+                        "size": {"width": [5, 5], "height": [3, 3]},
                         "strategy": "tree",
-                        "type": ["Rectangle", "Point"]
+                        "type": "Rectangle",
                     },
                     {
                         "type": "Point",
