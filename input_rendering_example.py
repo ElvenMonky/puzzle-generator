@@ -391,6 +391,9 @@ class GroupPlacement:
         return adj
 
     def _add_strategy_constraints(self):
+        if not len(self.instances):
+            return
+        
         strategy = self.spec.get("strategy", "random")
         gap = self.spec.get("gap", 0)
         max_n = self.max_count
@@ -637,7 +640,7 @@ if __name__ == "__main__":
         "layers": [
             {
                 "color": 1,
-                "count": 0,
+                "count": [2, 5],
                 "gap": 2,
                 "size": {"min": [3, 9], "max": [7, 15]},
                 "strategy": "random",
@@ -663,7 +666,7 @@ if __name__ == "__main__":
             },
             {
                 "color": 2,
-                "count": 9,
+                "count": 0,
                 "gap": 2,
                 "dir": [1, 7, 2],
                 "size": {
