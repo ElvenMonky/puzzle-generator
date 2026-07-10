@@ -162,21 +162,21 @@ def range_expr(var, spec):
 # ==========================================
 def rot_x(dx, dy, d):
     return If(d==0, dx,
-           If(d==1, dy,
+           If(d==1, -dy,
            If(d==2, -dx,
-           If(d==3, -dy,
-           If(d==4, dy,
+           If(d==3,  dy,
+           If(d==4,  dy,
            If(d==5, -dx,
            If(d==6, -dy,
                     dx)))))))
 
 def rot_y(dx, dy, d):
     return If(d==0, dy,
-           If(d==1, -dx,
+           If(d==1,  dx,
            If(d==2, -dy,
-           If(d==3, dx,
-           If(d==4, dx,
-           If(d==5, dy,
+           If(d==3, -dx,
+           If(d==4,  dx,
+           If(d==5,  dy,
            If(d==6, -dx,
                     -dy)))))))
 
@@ -311,10 +311,12 @@ class GroupPlacement:
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
+            # AABB and external dimensions
             xmin, xmax, ymin, ymax = inst.aabb()
             ext_w = xmax - xmin + 1
             ext_h = ymax - ymin + 1
 
+            # Containment
             solver.add(Implies(active,
                 And(xmin >= self.px,
                     xmax < self.px + self.pw,
@@ -328,7 +330,6 @@ class GroupPlacement:
                     And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
                 )))
 
-            # Children – local coordinate system (ox, oy, w, h) unchanged
             child_list = []
             for child_spec in spec.get("geometries", []):
                 child = GroupPlacement(child_spec,
@@ -338,7 +339,7 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints now applied to external dimensions
+        # Size constraints applied to external dimensions
         for i in range(self.max_count):
             inst = self.instances[i]
             typ = self.instance_types[i]
@@ -346,9 +347,7 @@ class GroupPlacement:
             active = i < self.count_var
 
             if typ == "Point" and not sz:
-                # Point always 1×1 external (and internal)
                 solver.add(Implies(active, And(inst.w == 1, inst.h == 1)))
-                # That already sets ext_w, ext_h via the link above
             elif sz:
                 xmin, xmax, ymin, ymax = inst.aabb()
                 ext_w = xmax - xmin + 1
@@ -359,7 +358,6 @@ class GroupPlacement:
                 if "min" in sz or "max" in sz:
                     min_spec = sz.get("min", [1, 1])
                     max_spec = sz.get("max", min_spec)
-                    # min/max refer to the smaller/larger of ext_w, ext_h
                     c.append(If(ext_w <= ext_h,
                                 And(range_expr(ext_w, min_spec), range_expr(ext_h, max_spec)),
                                 And(range_expr(ext_h, min_spec), range_expr(ext_w, max_spec))))
@@ -373,8 +371,7 @@ class GroupPlacement:
                     area_spec = sz["area"]
                     a_min, a_max, _ = parse_range(area_spec)
                     c.append(And(ext_w * ext_h >= a_min, ext_w * ext_h <= a_max))
-                if c:
-                    solver.add(Implies(active, And(c)))
+                if c: solver.add(Implies(active, And(c)))
 
         self._add_strategy_constraints()
 
@@ -400,6 +397,7 @@ class GroupPlacement:
         cnt = self.count_var
         insts = self.instances
 
+        # Global non‑overlap for strategies that don't handle their own placement
         if strategy in ("random", "tree", "chain", "star"):
             for i in range(max_n):
                 for j in range(i + 1, max_n):
@@ -665,11 +663,11 @@ if __name__ == "__main__":
             },
             {
                 "color": 2,
-                "count": 5,
+                "count": 9,
                 "gap": 2,
-                "dir": [1,7],
+                "dir": [1, 7, 2],
                 "size": {
-                    "width": [7, 7],
+                    "width": [8, 8],
                     "height": [5, 5],
                 },
                 "strategy": "flow",
@@ -682,9 +680,8 @@ if __name__ == "__main__":
                             "height": [2, 2],
                         },
                         "gap": 1,
-                        "dir": 0,
                         "strategy": "flow",
-                        "count": [1, 7],
+                        "count": [2, 7, 2],
                         "color": 3
                     }
                 ]
