@@ -424,6 +424,10 @@ class GroupPlacement:
                 c = []
                 if "width" in sz: c.append(range_expr(ext_w, sz["width"]))
                 if "height" in sz: c.append(range_expr(ext_h, sz["height"]))
+                if "top" in sz: c.append(range_expr(ymin - self.py, sz["top"]))
+                if "bottom" in sz: c.append(range_expr(self.py + self.ph - 1 - ymax, sz["bottom"]))
+                if "left" in sz: c.append(range_expr(xmin - self.px, sz["left"]))
+                if "right" in sz: c.append(range_expr(self.px + self.pw - 1 - xmax, sz["right"]))
                 if "min" in sz or "max" in sz:
                     min_spec = sz.get("min", [1, 1])
                     max_spec = sz.get("max", min_spec)
@@ -826,11 +830,9 @@ if __name__ == "__main__":
             },
             {
                 "color": 4,
-                "count": 10,
-                "gap": 2,
-                "size": {"min": [8, 8], "max": [10, 10]},
-                "strategy": "flow",
-                "type": "Geometry",
+                "count": 4,
+                "gap": 1,
+                "strategy": "random",
                 "pool": [
                     { "singleton": True, "weight": 1, "color": 6, },
                     { "singleton": True, "weight": 2, "color": 7, }
@@ -838,7 +840,7 @@ if __name__ == "__main__":
                 "prefix": [0, 1],
                 "weight": 0,
                 "type": "Line",
-                "size": {"width": [3, 3, 2], "height": [3, 3, 2], "ratio": 1},
+                "size": { "width": [1, 5, 2], "top": [0, 3], "bottom": 1 },
                 "geometries": [
                     #{"type": "Point", "count": [3,6], "strategy": "tree"}
                 ]
