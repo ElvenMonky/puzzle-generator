@@ -312,12 +312,23 @@ class GroupPlacement:
             self.instances.append(inst)
 
             xmin, xmax, ymin, ymax = inst.aabb()
+            ext_w = xmax - xmin + 1
+            ext_h = ymax - ymin + 1
+
             solver.add(Implies(active,
                 And(xmin >= self.px,
                     xmax < self.px + self.pw,
                     ymin >= self.py,
                     ymax < self.py + self.ph)))
 
+            # Link internal w,h to external dimensions based on orientation
+            solver.add(Implies(active,
+                Or(
+                    And(Or(d==0, d==2, d==5, d==7), w == ext_w, h == ext_h),
+                    And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
+                )))
+
+            # Children – local coordinate system (ox, oy, w, h) unchanged
             child_list = []
             for child_spec in spec.get("geometries", []):
                 child = GroupPlacement(child_spec,
@@ -327,36 +338,43 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints
+        # Size constraints now applied to external dimensions
         for i in range(self.max_count):
-            w_var = self.instances[i].w
-            h_var = self.instances[i].h
+            inst = self.instances[i]
             typ = self.instance_types[i]
             sz = self.instance_size_specs[i]
+            active = i < self.count_var
 
             if typ == "Point" and not sz:
-                solver.add(Implies(i < self.count_var, And(w_var == 1, h_var == 1)))
+                # Point always 1×1 external (and internal)
+                solver.add(Implies(active, And(inst.w == 1, inst.h == 1)))
+                # That already sets ext_w, ext_h via the link above
             elif sz:
+                xmin, xmax, ymin, ymax = inst.aabb()
+                ext_w = xmax - xmin + 1
+                ext_h = ymax - ymin + 1
                 c = []
-                if "width" in sz: c.append(range_expr(w_var, sz["width"]))
-                if "height" in sz: c.append(range_expr(h_var, sz["height"]))
+                if "width" in sz: c.append(range_expr(ext_w, sz["width"]))
+                if "height" in sz: c.append(range_expr(ext_h, sz["height"]))
                 if "min" in sz or "max" in sz:
                     min_spec = sz.get("min", [1, 1])
                     max_spec = sz.get("max", min_spec)
-                    c.append(If(w_var <= h_var,
-                                And(range_expr(w_var, min_spec), range_expr(h_var, max_spec)),
-                                And(range_expr(h_var, min_spec), range_expr(w_var, max_spec))))
+                    # min/max refer to the smaller/larger of ext_w, ext_h
+                    c.append(If(ext_w <= ext_h,
+                                And(range_expr(ext_w, min_spec), range_expr(ext_h, max_spec)),
+                                And(range_expr(ext_h, min_spec), range_expr(ext_w, max_spec))))
                 if "ratio" in sz:
                     ratio_spec = sz["ratio"]
                     r_min, r_max, _ = parse_range(ratio_spec)
-                    longer = If(w_var > h_var, w_var, h_var)
-                    shorter = If(w_var > h_var, h_var, w_var)
+                    longer = If(ext_w > ext_h, ext_w, ext_h)
+                    shorter = If(ext_w > ext_h, ext_h, ext_w)
                     c.append(And(longer >= shorter * r_min, longer <= shorter * r_max))
                 if "area" in sz:
                     area_spec = sz["area"]
                     a_min, a_max, _ = parse_range(area_spec)
-                    c.append(And(w_var * h_var >= a_min, w_var * h_var <= a_max))
-                if c: solver.add(Implies(i < self.count_var, And(c)))
+                    c.append(And(ext_w * ext_h >= a_min, ext_w * ext_h <= a_max))
+                if c:
+                    solver.add(Implies(active, And(c)))
 
         self._add_strategy_constraints()
 
@@ -419,7 +437,6 @@ class GroupPlacement:
                 _, _, yi_min, yi_max = inst.aabb()
                 self.solver.add(Implies(i < cnt, yi_max - yi_min + 1 <= row_height))
 
-            # first item at parent origin
             first = insts[0]
             x0_min, _, y0_min, _ = first.aabb()
             self.solver.add(Implies(0 < cnt, And(x0_min == self.px, y0_min == self.py)))
@@ -437,7 +454,6 @@ class GroupPlacement:
                     Implies(And((i-1) < cnt, i < cnt),
                             curr_ymin == If(fits, prev_ymin, prev_ymin + row_height + gap)))
 
-            # no row overflows parent height
             for i in range(max_n):
                 inst = insts[i]
                 _, _, _, yi_max = inst.aabb()
@@ -653,8 +669,8 @@ if __name__ == "__main__":
                 "gap": 2,
                 "dir": [1,7],
                 "size": {
-                    "max": [7, 7],
-                    "min": [5, 5],
+                    "width": [7, 7],
+                    "height": [5, 5],
                 },
                 "strategy": "flow",
                 "type": "Rectangle",
@@ -679,7 +695,6 @@ if __name__ == "__main__":
     exact = PuzzleGen.generate_exact_spec(generative_spec)
     grid_in = Canvas.parse_canvas(exact).render()
 
-    # fill each outer rectangle with its inner point's color (if any)
     def fill_container(node):
         point_color = None
         polys = []
