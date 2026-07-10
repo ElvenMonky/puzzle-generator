@@ -191,7 +191,7 @@ def z3_max(*vals):
     return m
 
 # ==========================================
-# 5. INSTANCE (with aabb)
+# 5. INSTANCE
 # ==========================================
 class Instance:
     def __init__(self, x, y, ox, oy, w, h, d):
@@ -238,7 +238,6 @@ class Instance:
 class GeneratorContext:
     def __init__(self):
         self.var = 0
-        self.singleton_cache = {}
 
 class GroupPlacement:
     def __init__(self, spec, parent_bounds, solver, ctx, inherited_color=-1):
@@ -291,8 +290,10 @@ class GroupPlacement:
 
         dir_constraint = make_dir_constraint(base_dir)
         singleton_first_vars = {}
+        first_singleton_occurrence = {}   # pool_index -> first instance index
 
         for i in range(self.max_count):
+            # --- Override resolution ---
             if i < len(prefix):
                 idx = prefix[i]
             elif pattern:
@@ -366,17 +367,28 @@ class GroupPlacement:
             if inst_dir_con is not None:
                 solver.add(Implies(active, inst_dir_con(d)))
 
-            if idx != -1 and idx < len(pool) and pool[idx].get("singleton", False):
+            # Singleton equality – only for singleton items
+            is_singleton = (idx != -1 and idx < len(pool) and pool[idx].get("singleton", False))
+            if is_singleton:
+                if idx not in first_singleton_occurrence:
+                    first_singleton_occurrence[idx] = i
+                    use_children = True
+                else:
+                    use_children = False
+                # Variable equality (for non-first occurrences)
                 if idx not in singleton_first_vars:
                     singleton_first_vars[idx] = (ox, oy, w, h, d)
                 else:
                     f_ox, f_oy, f_w, f_h, f_d = singleton_first_vars[idx]
                     solver.add(Implies(active, And(ox == f_ox, oy == f_oy,
                                                    w == f_w, h == f_h, d == f_d)))
+            else:
+                use_children = True
 
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
+            # Containment
             if self.margin > 0:
                 exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
             else:
@@ -392,13 +404,15 @@ class GroupPlacement:
                 And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
             )))
 
+            # Children – only for first singleton or non‑singleton
             child_list = []
-            for child_spec in inst_geometries:
-                child = GroupPlacement(child_spec,
-                                       parent_bounds=(ox, oy, w, h),
-                                       solver=solver, ctx=ctx,
-                                       inherited_color=self.resolved_color)
-                child_list.append(child)
+            if use_children:
+                for child_spec in inst_geometries:
+                    child = GroupPlacement(child_spec,
+                                           parent_bounds=(ox, oy, w, h),
+                                           solver=solver, ctx=ctx,
+                                           inherited_color=self.resolved_color)
+                    child_list.append(child)
             self.child_groups.append(child_list)
 
         # Size constraints
@@ -435,6 +449,7 @@ class GroupPlacement:
                 if c: solver.add(Implies(active, And(c)))
 
         self._add_strategy_constraints()
+
     def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
         adj = []
         a = insts[j]; b = insts[i]
@@ -550,6 +565,8 @@ class GroupPlacement:
         spec = self.spec
         count_val = model[self.count_var].as_long()
         result = []
+        singleton_children_cache = {}   # (id(spec), pool_index) -> list of geometry dicts
+
         for i in range(count_val):
             inst = self.instances[i]
             x = model[inst.x].as_long()
@@ -575,21 +592,22 @@ class GroupPlacement:
             elif typ == "Point":
                 item = {"type": "Point", "x": x, "y": y, "dir": d_val, "color": color, "geometries": []}
 
-            # ---- Singleton child caching ----
-            pool = self.spec.get("pool", [])
+            # Singleton children handling
+            pool = spec.get("pool", [])
             idx = self.instance_pool_indices[i]
             if idx != -1 and idx < len(pool) and pool[idx].get("singleton", False):
-                cache_key = (id(self.spec), idx)
-                if cache_key not in self.ctx.singleton_cache:
-                    # First copy – extract children normally and cache them
+                cache_key = (id(spec), idx)
+                if cache_key not in singleton_children_cache:
+                    # First occurrence – extract and cache
                     children = []
+                    # The child groups exist only for the first occurrence
                     for child_group in self.child_groups[i]:
                         children.extend(child_group.extract_geometries(model))
-                    self.ctx.singleton_cache[cache_key] = children
-                # Use the cached children
-                item["geometries"].extend(self.ctx.singleton_cache[cache_key])
+                    singleton_children_cache[cache_key] = children
+                # Use the cached children for all copies
+                item["geometries"].extend(singleton_children_cache[cache_key])
             else:
-                # Not a singleton – extract normally
+                # Non‑singleton – extract normally
                 for child_group in self.child_groups[i]:
                     item["geometries"].extend(child_group.extract_geometries(model))
 
@@ -810,18 +828,18 @@ if __name__ == "__main__":
             {
                 "color": 1,
                 "count": 5,
-                "gap": 1,
+                "gap": 2,
                 "size": {"min": [8, 8], "max": [10, 10]},
                 "strategy": "flow",
                 "type": "Geometry",
                 "pool": [
                     {
                         "type": "Rectangle",
-                        "size": {"width": [3, 5], "height": [3, 5]},
+                        "size": {"width": [3, 5, 2], "height": [3, 5, 2], "ratio": 1},
                         "color": 4,
                         "singleton": True,
                         "geometries": [
-                            {"type": "Point", "color": 5, "count": [3,6], "strategy": "random"}
+                            {"type": "Point", "color": 5, "count": [3,6], "strategy": "tree"}
                         ]
                     }
                 ],
