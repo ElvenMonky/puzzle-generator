@@ -238,6 +238,7 @@ class Instance:
 class GeneratorContext:
     def __init__(self):
         self.var = 0
+        self.singleton_cache = {}
 
 class GroupPlacement:
     def __init__(self, spec, parent_bounds, solver, ctx, inherited_color=-1):
@@ -247,7 +248,6 @@ class GroupPlacement:
         self.px, self.py, self.pw, self.ph = parent_bounds
         self.inherited_color = inherited_color
 
-        # Pool / prefix / pattern
         pool = spec.get("pool", [])
         prefix = spec.get("prefix", [])
         pattern = spec.get("pattern", [])
@@ -267,8 +267,8 @@ class GroupPlacement:
         base_size = spec.get("size", {})
         base_color = spec.get("color")
         base_dir = spec.get("dir", None)
+        base_geometries = spec.get("geometries", [])
 
-        # --- margin ---
         margin_spec = spec.get("margin", 0)
         if isinstance(margin_spec, (int, float)):
             self.margin = int(margin_spec)
@@ -280,20 +280,19 @@ class GroupPlacement:
         self.instance_types = []
         self.instance_size_specs = []
         self.instance_colors = []
+        self.instance_pool_indices = []
+        self.instance_geometries = []
 
         def make_dir_constraint(dir_val):
-            if dir_val is None:
-                return None
-            if isinstance(dir_val, int):
-                return lambda d: (d == dir_val)
-            if isinstance(dir_val, list):
-                return lambda d: Or([d == v for v in dir_val])
+            if dir_val is None: return None
+            if isinstance(dir_val, int): return lambda d: (d == dir_val)
+            if isinstance(dir_val, list): return lambda d: Or([d == v for v in dir_val])
             return None
 
         dir_constraint = make_dir_constraint(base_dir)
+        singleton_first_vars = {}
 
         for i in range(self.max_count):
-            # Override resolution
             if i < len(prefix):
                 idx = prefix[i]
             elif pattern:
@@ -307,53 +306,48 @@ class GroupPlacement:
                 for p_item in pool:
                     w = p_item.get("weight", 0)
                     total_weight += w
-
                 if total_weight == 0:
                     total_weight = 1
                     base_w = 1
-
                 r = random.uniform(0, total_weight)
-
                 chosen = False
                 for p_item in pool:
                     w = p_item.get("weight", 0)
-                    if w <= 0:
-                        continue
+                    if w <= 0: continue
                     if r < w:
                         ov_type = p_item.get("type", base_type)
-                        if isinstance(ov_type, list):
-                            ov_type = random.choice(ov_type)
+                        if isinstance(ov_type, list): ov_type = random.choice(ov_type)
                         inst_size = p_item.get("size", base_size)
                         inst_color = p_item.get("color", base_color)
                         inst_dir = p_item.get("dir", base_dir)
                         inst_dir_con = make_dir_constraint(inst_dir)
+                        inst_geometries = p_item.get("geometries", base_geometries)
                         inst_type = ov_type
                         chosen = True
                         break
                     r -= w
-
                 if not chosen:
-                    if isinstance(base_type, list):
-                        inst_type = random.choice(base_type)
-                    else:
-                        inst_type = base_type
+                    inst_type = base_type if not isinstance(base_type, list) else random.choice(base_type)
                     inst_size = base_size
                     inst_color = base_color
                     inst_dir = base_dir
                     inst_dir_con = dir_constraint
+                    inst_geometries = base_geometries
             else:
                 ov = pool[idx]
                 inst_type = ov.get("type", base_type)
-                if isinstance(inst_type, list):
-                    inst_type = random.choice(inst_type)
+                if isinstance(inst_type, list): inst_type = random.choice(inst_type)
                 inst_size = ov.get("size", base_size)
                 inst_color = ov.get("color", base_color)
                 inst_dir = ov.get("dir", base_dir)
                 inst_dir_con = make_dir_constraint(inst_dir)
+                inst_geometries = ov.get("geometries", base_geometries)
 
             self.instance_types.append(inst_type)
             self.instance_size_specs.append(inst_size)
             self.instance_colors.append(inst_color)
+            self.instance_pool_indices.append(idx)
+            self.instance_geometries.append(inst_geometries)
 
             x = Int(f"x_{ctx.var}"); ctx.var += 1
             y = Int(f"y_{ctx.var}"); ctx.var += 1
@@ -365,42 +359,41 @@ class GroupPlacement:
 
             active = i < self.count_var
             solver.add(If(active,
-                          And(ox <= 0, ox > -w,
-                              oy <= 0, oy > -h,
-                              w >= 1, h >= 1,
-                              d >= 0, d <= 7),
+                          And(ox <= 0, ox > -w, oy <= 0, oy > -h,
+                              w >= 1, h >= 1, d >= 0, d <= 7),
                           And(ox == 0, oy == 0, x == 0, y == 0, w == 0, h == 0, d == 0)))
 
             if inst_dir_con is not None:
                 solver.add(Implies(active, inst_dir_con(d)))
 
+            if idx != -1 and idx < len(pool) and pool[idx].get("singleton", False):
+                if idx not in singleton_first_vars:
+                    singleton_first_vars[idx] = (ox, oy, w, h, d)
+                else:
+                    f_ox, f_oy, f_w, f_h, f_d = singleton_first_vars[idx]
+                    solver.add(Implies(active, And(ox == f_ox, oy == f_oy,
+                                                   w == f_w, h == f_h, d == f_d)))
+
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
-            # Containment – use expanded AABB if margin > 0
             if self.margin > 0:
                 exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
             else:
                 exmin, exmax, eymin, eymax = inst.aabb()
-            solver.add(Implies(active,
-                And(exmin >= self.px,
-                    exmax < self.px + self.pw,
-                    eymin >= self.py,
-                    eymax < self.py + self.ph)))
+            solver.add(Implies(active, And(exmin >= self.px, exmax < self.px + self.pw,
+                                           eymin >= self.py, eymax < self.py + self.ph)))
 
-            # Link internal w,h to external dimensions based on orientation
             xmin, xmax, ymin, ymax = inst.aabb()
             ext_w = xmax - xmin + 1
             ext_h = ymax - ymin + 1
-            solver.add(Implies(active,
-                Or(
-                    And(Or(d==0, d==2, d==5, d==7), w == ext_w, h == ext_h),
-                    And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
-                )))
+            solver.add(Implies(active, Or(
+                And(Or(d==0, d==2, d==5, d==7), w == ext_w, h == ext_h),
+                And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
+            )))
 
-            # Children – placed in raw (unexpanded) bounding box
             child_list = []
-            for child_spec in spec.get("geometries", []):
+            for child_spec in inst_geometries:
                 child = GroupPlacement(child_spec,
                                        parent_bounds=(ox, oy, w, h),
                                        solver=solver, ctx=ctx,
@@ -408,13 +401,12 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints on raw external dimensions
+        # Size constraints
         for i in range(self.max_count):
             inst = self.instances[i]
             typ = self.instance_types[i]
             sz = self.instance_size_specs[i]
             active = i < self.count_var
-
             if typ == "Point" and not sz:
                 solver.add(Implies(active, And(inst.w == 1, inst.h == 1)))
             elif sz:
@@ -443,7 +435,6 @@ class GroupPlacement:
                 if c: solver.add(Implies(active, And(c)))
 
         self._add_strategy_constraints()
-
     def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
         adj = []
         a = insts[j]; b = insts[i]
@@ -451,31 +442,15 @@ class GroupPlacement:
         b_min_x, b_max_x, b_min_y, b_max_y = b.aabb()
 
         if "Line" in allowed_types:
-            adj.append(And(cond,
-                           b_min_x == a_max_x + lvar + 1,
-                           a_min_y < b_max_y, b_min_y < a_max_y))
-            adj.append(And(cond,
-                           a_min_x == b_max_x + lvar + 1,
-                           a_min_y < b_max_y, b_min_y < a_max_y))
-            adj.append(And(cond,
-                           b_min_y == a_max_y + lvar + 1,
-                           a_min_x < b_max_x, b_min_x < a_max_x))
-            adj.append(And(cond,
-                           a_min_y == b_max_y + lvar + 1,
-                           a_min_x < b_max_x, b_min_x < a_max_x))
+            adj.append(And(cond, b_min_x == a_max_x + lvar + 1, a_min_y < b_max_y, b_min_y < a_max_y))
+            adj.append(And(cond, a_min_x == b_max_x + lvar + 1, a_min_y < b_max_y, b_min_y < a_max_y))
+            adj.append(And(cond, b_min_y == a_max_y + lvar + 1, a_min_x < b_max_x, b_min_x < a_max_x))
+            adj.append(And(cond, a_min_y == b_max_y + lvar + 1, a_min_x < b_max_x, b_min_x < a_max_x))
         if "Diagonal" in allowed_types:
-            adj.append(And(cond,
-                           b_min_x == a_max_x + lvar + 1,
-                           b_min_y == a_max_y + lvar + 1))
-            adj.append(And(cond,
-                           b_max_x == a_min_x - lvar - 1,
-                           b_min_y == a_max_y + lvar + 1))
-            adj.append(And(cond,
-                           a_min_x == b_max_x + lvar + 1,
-                           a_min_y == b_max_y + lvar + 1))
-            adj.append(And(cond,
-                           b_min_x == a_max_x + lvar + 1,
-                           b_max_y == a_min_y - lvar - 1))
+            adj.append(And(cond, b_min_x == a_max_x + lvar + 1, b_min_y == a_max_y + lvar + 1))
+            adj.append(And(cond, b_max_x == a_min_x - lvar - 1, b_min_y == a_max_y + lvar + 1))
+            adj.append(And(cond, a_min_x == b_max_x + lvar + 1, a_min_y == b_max_y + lvar + 1))
+            adj.append(And(cond, b_min_x == a_max_x + lvar + 1, b_max_y == a_min_y - lvar - 1))
         return adj
 
     def _add_strategy_constraints(self):
@@ -600,8 +575,24 @@ class GroupPlacement:
             elif typ == "Point":
                 item = {"type": "Point", "x": x, "y": y, "dir": d_val, "color": color, "geometries": []}
 
-            for child_group in self.child_groups[i]:
-                item["geometries"].extend(child_group.extract_geometries(model))
+            # ---- Singleton child caching ----
+            pool = self.spec.get("pool", [])
+            idx = self.instance_pool_indices[i]
+            if idx != -1 and idx < len(pool) and pool[idx].get("singleton", False):
+                cache_key = (id(self.spec), idx)
+                if cache_key not in self.ctx.singleton_cache:
+                    # First copy – extract children normally and cache them
+                    children = []
+                    for child_group in self.child_groups[i]:
+                        children.extend(child_group.extract_geometries(model))
+                    self.ctx.singleton_cache[cache_key] = children
+                # Use the cached children
+                item["geometries"].extend(self.ctx.singleton_cache[cache_key])
+            else:
+                # Not a singleton – extract normally
+                for child_group in self.child_groups[i]:
+                    item["geometries"].extend(child_group.extract_geometries(model))
+
             result.append(item)
 
         if spec.get("strategy") in ("tree", "chain", "star") and "link" in spec and count_val > 1:
@@ -741,7 +732,7 @@ class PuzzleGen:
         }
 
 # ==========================================
-# 8. EXECUTION 
+# 8. EXECUTION
 # ==========================================
 if __name__ == "__main__":
     generative_spec = {
@@ -810,11 +801,32 @@ if __name__ == "__main__":
                 ],
                 "prefix": [0, 0, 1],
                 #"pattern": [2, -1],
-                "count": 20,
+                "count": 0,
                 "strategy": "flow",
                 "gap": 1,
                 "type": "Point",
                 "color": 2
+            },
+            {
+                "color": 1,
+                "count": 5,
+                "gap": 1,
+                "size": {"min": [8, 8], "max": [10, 10]},
+                "strategy": "flow",
+                "type": "Geometry",
+                "pool": [
+                    {
+                        "type": "Rectangle",
+                        "size": {"width": [3, 5], "height": [3, 5]},
+                        "color": 4,
+                        "singleton": True,
+                        "geometries": [
+                            {"type": "Point", "color": 5, "count": [3,6], "strategy": "random"}
+                        ]
+                    }
+                ],
+                "pattern": [0],
+                "weight": 0,
             }
         ]
     }
