@@ -249,7 +249,10 @@ class GroupPlacement:
         self.px, self.py, self.pw, self.ph = parent_bounds
         self.inherited_color = inherited_color
 
-        self.pattern = spec.get("pattern", None)
+        # Pool / prefix / pattern
+        pool = spec.get("pool", [])
+        prefix = spec.get("prefix", [])
+        pattern = spec.get("pattern", [])
 
         count_spec = spec.get("count", 1)
         self.min_count, self.max_count, self.step_count = parse_range(count_spec)
@@ -292,19 +295,63 @@ class GroupPlacement:
         dir_constraint = make_dir_constraint(base_dir)
 
         for i in range(self.max_count):
-            if self.pattern:
-                pat = self.pattern[i % len(self.pattern)]
-                inst_type = pat.get("type", base_type)
-                if isinstance(inst_type, list): inst_type = random.choice(inst_type)
-                inst_size = pat.get("size", base_size)
-                inst_color = pat.get("color", base_color)
-                pat_dir = pat.get("dir", base_dir)
-                inst_dir_con = make_dir_constraint(pat_dir)
+            # Override resolution
+            if i < len(prefix):
+                idx = prefix[i]
+            elif pattern:
+                idx = pattern[(i - len(prefix)) % len(pattern)]
             else:
-                inst_type = base_type if not isinstance(base_type, list) else random.choice(base_type)
-                inst_size = base_size
-                inst_color = base_color
-                inst_dir_con = dir_constraint
+                idx = -1
+
+            if idx == -1 or idx >= len(pool):
+                base_w = spec.get("weight", 1)
+                total_weight = base_w
+                for p_item in pool:
+                    w = p_item.get("weight", 0)
+                    total_weight += w
+
+                if total_weight == 0:
+                    total_weight = 1
+                    base_w = 1
+
+                r = random.uniform(0, total_weight)
+
+                chosen = False
+                for p_item in pool:
+                    w = p_item.get("weight", 0)
+                    if w <= 0:
+                        continue
+                    if r < w:
+                        ov_type = p_item.get("type", base_type)
+                        if isinstance(ov_type, list):
+                            ov_type = random.choice(ov_type)
+                        inst_size = p_item.get("size", base_size)
+                        inst_color = p_item.get("color", base_color)
+                        inst_dir = p_item.get("dir", base_dir)
+                        inst_dir_con = make_dir_constraint(inst_dir)
+                        inst_type = ov_type
+                        chosen = True
+                        break
+                    r -= w
+
+                if not chosen:
+                    if isinstance(base_type, list):
+                        inst_type = random.choice(base_type)
+                    else:
+                        inst_type = base_type
+                    inst_size = base_size
+                    inst_color = base_color
+                    inst_dir = base_dir
+                    inst_dir_con = dir_constraint
+            else:
+                ov = pool[idx]
+                inst_type = ov.get("type", base_type)
+                if isinstance(inst_type, list):
+                    inst_type = random.choice(inst_type)
+                inst_size = ov.get("size", base_size)
+                inst_color = ov.get("color", base_color)
+                inst_dir = ov.get("dir", base_dir)
+                inst_dir_con = make_dir_constraint(inst_dir)
 
             self.instance_types.append(inst_type)
             self.instance_size_specs.append(inst_size)
@@ -742,7 +789,7 @@ if __name__ == "__main__":
             },
             {
                 "color": 2,
-                "count": 3,
+                "count": 0,
                 "gap": 2,
                 "margin": 2,
                 "size": {
@@ -765,6 +812,20 @@ if __name__ == "__main__":
                         "color": 3
                     }
                 ]
+            },
+            {
+                "pool": [
+                    {"type": "Point", "weight": 2, "color": 5, "size": {"width": 1, "height": 1}},
+                    {"type": "Rectangle", "weight": 1, "size": {"width": [2,3], "height": [2,3]}, "color": 4},
+                    {"type": "Rectangle", "size": {"width": 4, "height": 4}, "color": 6}
+                ],
+                "prefix": [0, 0, 1],
+                #"pattern": [2, -1],
+                "count": 20,
+                "strategy": "flow",
+                "gap": 1,
+                "type": "Point",
+                "color": 2
             }
         ]
     }
