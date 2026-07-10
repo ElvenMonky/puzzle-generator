@@ -158,7 +158,7 @@ def range_expr(var, spec):
     return And(var >= lo, var <= hi, (var - lo) % step == 0)
 
 # ==========================================
-# 4. ROTATION HELPERS (module‑level)
+# 4. ROTATION HELPERS
 # ==========================================
 def rot_x(dx, dy, d):
     return If(d==0, dx,
@@ -230,6 +230,10 @@ class Instance:
         max_y = model.evaluate(self.aabb()[3]).as_long()
         return min_x, max_x, min_y, max_y
 
+    def expanded_aabb(self, margin):
+        min_x, max_x, min_y, max_y = self.aabb()
+        return min_x - margin, max_x + margin, min_y - margin, max_y + margin
+
 # ==========================================
 # 6. GROUP PLACEMENT ENGINE
 # ==========================================
@@ -262,6 +266,15 @@ class GroupPlacement:
         base_size = spec.get("size", {})
         base_color = spec.get("color")
         base_dir = spec.get("dir", None)
+
+        # --- margin ---
+        margin_spec = spec.get("margin", 0)
+        if isinstance(margin_spec, (int, float)):
+            self.margin = int(margin_spec)
+        elif isinstance(margin_spec, list):
+            self.margin = roll_range(margin_spec)
+        else:
+            self.margin = 0
 
         self.instance_types = []
         self.instance_size_specs = []
@@ -319,25 +332,28 @@ class GroupPlacement:
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
-            # AABB and external dimensions
+            # Containment – use expanded AABB if margin > 0
+            if self.margin > 0:
+                exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
+            else:
+                exmin, exmax, eymin, eymax = inst.aabb()
+            solver.add(Implies(active,
+                And(exmin >= self.px,
+                    exmax < self.px + self.pw,
+                    eymin >= self.py,
+                    eymax < self.py + self.ph)))
+
+            # Link internal w,h to external dimensions based on orientation
             xmin, xmax, ymin, ymax = inst.aabb()
             ext_w = xmax - xmin + 1
             ext_h = ymax - ymin + 1
-
-            # Containment
-            solver.add(Implies(active,
-                And(xmin >= self.px,
-                    xmax < self.px + self.pw,
-                    ymin >= self.py,
-                    ymax < self.py + self.ph)))
-
-            # Link internal w,h to external dimensions based on orientation
             solver.add(Implies(active,
                 Or(
                     And(Or(d==0, d==2, d==5, d==7), w == ext_w, h == ext_h),
                     And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
                 )))
 
+            # Children – placed in raw (unexpanded) bounding box
             child_list = []
             for child_spec in spec.get("geometries", []):
                 child = GroupPlacement(child_spec,
@@ -347,7 +363,7 @@ class GroupPlacement:
                 child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints applied to external dimensions
+        # Size constraints on raw external dimensions
         for i in range(self.max_count):
             inst = self.instances[i]
             typ = self.instance_types[i]
@@ -426,18 +442,27 @@ class GroupPlacement:
     def _add_strategy_constraints(self):
         if not self.instances:
             return
+
         strategy = self.spec.get("strategy", "random")
         gap = self.spec.get("gap", 0)
         max_n = self.max_count
         cnt = self.count_var
         insts = self.instances
+        margin = self.margin
 
-        # Global non‑overlap for strategies that don't handle their own placement
+        # Helper: expanded AABB (with margin) for placement
+        def aabb_edges(inst):
+            if margin > 0:
+                return inst.expanded_aabb(margin)
+            else:
+                return inst.aabb()
+
+        # Global non‑overlap for random/tree/chain/star – uses expanded AABBs
         if strategy in ("random", "tree", "chain", "star"):
             for i in range(max_n):
                 for j in range(i + 1, max_n):
-                    xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
-                    xj_min, xj_max, yj_min, yj_max = insts[j].aabb()
+                    xi_min, xi_max, yi_min, yi_max = aabb_edges(insts[i])
+                    xj_min, xj_max, yj_min, yj_max = aabb_edges(insts[j])
                     self.solver.add(
                         Implies(And(i < cnt, j < cnt),
                                 Or(xi_max + gap < xj_min,
@@ -451,13 +476,13 @@ class GroupPlacement:
         elif strategy == "row":
             for i in range(max_n):
                 inst = insts[i]
-                xi_min, xi_max, yi_min, yi_max = inst.aabb()
+                xi_min, xi_max, yi_min, yi_max = aabb_edges(inst)
                 self.solver.add(Implies(i < cnt, yi_min == self.py))
                 if i == 0:
                     self.solver.add(Implies(i < cnt, xi_min == self.px))
                 else:
                     prev = insts[i-1]
-                    _, prev_xmax, _, _ = prev.aabb()
+                    _, prev_xmax, _, _ = aabb_edges(prev)
                     self.solver.add(Implies(i < cnt, xi_min == prev_xmax + gap + 1))
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
                 self.solver.add(Implies(i < cnt, xi_max < self.px + self.pw))
@@ -467,17 +492,17 @@ class GroupPlacement:
             self.solver.add(row_height >= 0)
             for i in range(max_n):
                 inst = insts[i]
-                _, _, yi_min, yi_max = inst.aabb()
+                _, _, yi_min, yi_max = aabb_edges(inst)
                 self.solver.add(Implies(i < cnt, yi_max - yi_min + 1 <= row_height))
 
             first = insts[0]
-            x0_min, _, y0_min, _ = first.aabb()
+            x0_min, _, y0_min, _ = aabb_edges(first)
             self.solver.add(Implies(0 < cnt, And(x0_min == self.px, y0_min == self.py)))
 
             for i in range(1, max_n):
                 prev = insts[i-1]; curr = insts[i]
-                _, prev_xmax, prev_ymin, _ = prev.aabb()
-                curr_xmin, curr_xmax, curr_ymin, _ = curr.aabb()
+                _, prev_xmax, prev_ymin, _ = aabb_edges(prev)
+                curr_xmin, curr_xmax, curr_ymin, _ = aabb_edges(curr)
                 curr_width = curr_xmax - curr_xmin + 1
                 fits = (prev_xmax + gap + 1 + curr_width <= self.px + self.pw)
                 self.solver.add(
@@ -489,10 +514,11 @@ class GroupPlacement:
 
             for i in range(max_n):
                 inst = insts[i]
-                _, _, _, yi_max = inst.aabb()
+                _, _, _, yi_max = aabb_edges(inst)
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
 
         elif strategy in ("tree", "chain", "star"):
+            # links still use raw AABB
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
@@ -500,12 +526,9 @@ class GroupPlacement:
                     lvar = Int(f"link_{self.ctx.var}"); self.ctx.var += 1
                     self.link_vars.append(lvar)
                     self.solver.add(Implies(i < cnt, range_expr(lvar, link_spec["length"])))
-                    if strategy == "tree":
-                        parent_indices = range(i)
-                    elif strategy == "chain":
-                        parent_indices = [i - 1]
-                    elif strategy == "star":
-                        parent_indices = [0]
+                    if strategy == "tree": parent_indices = range(i)
+                    elif strategy == "chain": parent_indices = [i - 1]
+                    elif strategy == "star": parent_indices = [0]
                     adj = []
                     for j in parent_indices:
                         cond = And(j < cnt, i < cnt)
@@ -692,7 +715,7 @@ if __name__ == "__main__":
         "layers": [
             {
                 "color": 1,
-                "count": [2, 5],
+                "count": 0, #[2, 5],
                 "gap": 2,
                 "size": {"min": [3, 9], "max": [7, 15]},
                 "strategy": "random",
@@ -719,12 +742,12 @@ if __name__ == "__main__":
             },
             {
                 "color": 2,
-                "count": 0,
+                "count": 3,
                 "gap": 2,
-                "dir": [1, 7, 2],
+                "margin": 2,
                 "size": {
-                    "width": [8, 8],
-                    "height": [5, 5],
+                    "width": 10,
+                    "height": 7,
                 },
                 "strategy": "flow",
                 "type": "Rectangle",
@@ -736,6 +759,7 @@ if __name__ == "__main__":
                             "height": [2, 2],
                         },
                         "gap": 1,
+                        "margin": 1,
                         "strategy": "flow",
                         "count": [2, 7, 2],
                         "color": 3
