@@ -311,8 +311,8 @@ class GroupPlacement:
                     total_weight = 1
                     base_w = 1
                 r = random.uniform(0, total_weight)
-                chosen = False
-                for p_item in pool:
+                idx = -1
+                for p_index, p_item in enumerate(pool):
                     w = p_item.get("weight", 0)
                     if w <= 0: continue
                     if r < w:
@@ -324,10 +324,10 @@ class GroupPlacement:
                         inst_dir_con = make_dir_constraint(inst_dir)
                         inst_geometries = p_item.get("geometries", base_geometries)
                         inst_type = ov_type
-                        chosen = True
+                        idx = p_index
                         break
                     r -= w
-                if not chosen:
+                if idx < 0:
                     inst_type = base_type if not isinstance(base_type, list) else random.choice(base_type)
                     inst_size = base_size
                     inst_color = base_color
@@ -826,25 +826,23 @@ if __name__ == "__main__":
                 "color": 2
             },
             {
-                "color": 1,
-                "count": 5,
+                "color": 4,
+                "count": 10,
                 "gap": 2,
                 "size": {"min": [8, 8], "max": [10, 10]},
                 "strategy": "flow",
                 "type": "Geometry",
                 "pool": [
-                    {
-                        "type": "Rectangle",
-                        "size": {"width": [3, 5, 2], "height": [3, 5, 2], "ratio": 1},
-                        "color": 4,
-                        "singleton": True,
-                        "geometries": [
-                            {"type": "Point", "color": 5, "count": [3,6], "strategy": "tree"}
-                        ]
-                    }
+                    { "singleton": True, "weight": 1 },
+                    { "singleton": True, "weight": 2 }
                 ],
-                "pattern": [0],
+                "prefix": [0, 1],
                 "weight": 0,
+                "type": "Rectangle",
+                "size": {"width": [3, 3, 2], "height": [3, 3, 2], "ratio": 1},
+                "geometries": [
+                    {"type": "Point", "color": [5,7], "count": [3,6], "strategy": "tree"}
+                ]
             }
         ]
     }
