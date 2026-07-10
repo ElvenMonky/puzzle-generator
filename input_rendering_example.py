@@ -290,7 +290,7 @@ class GroupPlacement:
 
         dir_constraint = make_dir_constraint(base_dir)
         singleton_first_vars = {}
-        first_singleton_occurrence = {}   # pool_index -> first instance index
+        first_singleton_occurrence = {}
 
         for i in range(self.max_count):
             # --- Override resolution ---
@@ -367,7 +367,6 @@ class GroupPlacement:
             if inst_dir_con is not None:
                 solver.add(Implies(active, inst_dir_con(d)))
 
-            # Singleton equality – only for singleton items
             is_singleton = (idx != -1 and idx < len(pool) and pool[idx].get("singleton", False))
             if is_singleton:
                 if idx not in first_singleton_occurrence:
@@ -375,7 +374,6 @@ class GroupPlacement:
                     use_children = True
                 else:
                     use_children = False
-                # Variable equality (for non-first occurrences)
                 if idx not in singleton_first_vars:
                     singleton_first_vars[idx] = (ox, oy, w, h, d)
                 else:
@@ -388,7 +386,6 @@ class GroupPlacement:
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
-            # Containment
             if self.margin > 0:
                 exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
             else:
@@ -404,7 +401,6 @@ class GroupPlacement:
                 And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
             )))
 
-            # Children – only for first singleton or non‑singleton
             child_list = []
             if use_children:
                 for child_spec in inst_geometries:
@@ -565,7 +561,7 @@ class GroupPlacement:
         spec = self.spec
         count_val = model[self.count_var].as_long()
         result = []
-        singleton_children_cache = {}   # (id(spec), pool_index) -> list of geometry dicts
+        singleton_children_cache = {}
 
         for i in range(count_val):
             inst = self.instances[i]
@@ -592,22 +588,17 @@ class GroupPlacement:
             elif typ == "Point":
                 item = {"type": "Point", "x": x, "y": y, "dir": d_val, "color": color, "geometries": []}
 
-            # Singleton children handling
             pool = spec.get("pool", [])
             idx = self.instance_pool_indices[i]
             if idx != -1 and idx < len(pool) and pool[idx].get("singleton", False):
                 cache_key = (id(spec), idx)
                 if cache_key not in singleton_children_cache:
-                    # First occurrence – extract and cache
                     children = []
-                    # The child groups exist only for the first occurrence
                     for child_group in self.child_groups[i]:
                         children.extend(child_group.extract_geometries(model))
                     singleton_children_cache[cache_key] = children
-                # Use the cached children for all copies
                 item["geometries"].extend(singleton_children_cache[cache_key])
             else:
-                # Non‑singleton – extract normally
                 for child_group in self.child_groups[i]:
                     item["geometries"].extend(child_group.extract_geometries(model))
 
