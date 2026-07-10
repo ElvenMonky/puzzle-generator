@@ -49,19 +49,16 @@ class Point(Geometry):
     def get_local_points(self): return [(0, 0, self.color)]
 
 class Line(Geometry):
-    def __init__(self, x=0, y=0, dir=0, length=1, color=None, geometries=None):
+    def __init__(self, x=0, y=0, dir=0, length=1, ox=0, oy=0, dy=0, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.length = length
-    def get_local_points(self): return [(i, 0, self.color) for i in range(self.length)]
-
-class Diagonal(Geometry):
-    def __init__(self, x=0, y=0, dir=0, length=1, color=None, geometries=None):
-        super().__init__(x, y, dir, color, geometries)
-        self.length = length
-    def get_local_points(self): return [(i, i, self.color) for i in range(self.length)]
+        self.ox = ox
+        self.oy = oy
+        self.dy = dy
+    def get_local_points(self): return [(i+self.ox, self.dy*i+self.oy, self.color) for i in range(self.length)]
 
 class Polygon(Geometry):
-    def __init__(self, x=0, y=0, dir=0, color=None, fill_color=None, vertices=None, geometries=None):
+    def __init__(self, x=0, y=0, dir=0, fill_color=None, vertices=None, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.vertices = vertices or []
         self.fill_color = fill_color
@@ -96,8 +93,8 @@ class Canvas:
         d = g_spec.get("dir", 0)
         subs = [Canvas.parse_geometry(s) for s in g_spec.get("geometries", [])]
         if t == "Polygon": return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertices=g_spec.get("vertices", []), geometries=subs)
-        elif t == "Line": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
-        elif t == "Diagonal": return Diagonal(x=x, y=y, dir=d, length=g_spec.get("length", 1), color=c, geometries=subs)
+        elif t == "Line": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), dy=0, color=c, geometries=subs)
+        elif t == "Diagonal": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), dy=1, color=c, geometries=subs)
         elif t == "Point": return Point(x=x, y=y, dir=d, color=c, geometries=subs)
         return Geometry(x=x, y=y, dir=d, color=c, geometries=subs)
 
@@ -267,6 +264,7 @@ class GroupPlacement:
         base_color = spec.get("color")
         base_dir = spec.get("dir", None)
         base_geometries = spec.get("geometries", [])
+        base_origin = spec.get("origin", {})
 
         margin_spec = spec.get("margin", 0)
         if isinstance(margin_spec, (int, float)):
@@ -277,10 +275,8 @@ class GroupPlacement:
             self.margin = 0
 
         self.instance_types = []
-        self.instance_size_specs = []
         self.instance_colors = []
         self.instance_pool_indices = []
-        self.instance_geometries = []
 
         def make_dir_constraint(dir_val):
             if dir_val is None: return None
@@ -300,6 +296,8 @@ class GroupPlacement:
                 idx = pattern[(i - len(prefix)) % len(pattern)]
             else:
                 idx = -1
+
+            inst_origin = base_origin
 
             if idx == -1 or idx >= len(pool):
                 base_w = spec.get("weight", 1)
@@ -323,6 +321,7 @@ class GroupPlacement:
                         inst_dir = p_item.get("dir", base_dir)
                         inst_dir_con = make_dir_constraint(inst_dir)
                         inst_geometries = p_item.get("geometries", base_geometries)
+                        inst_origin = p_item.get("origin", base_origin)
                         inst_type = ov_type
                         idx = p_index
                         break
@@ -343,12 +342,11 @@ class GroupPlacement:
                 inst_dir = ov.get("dir", base_dir)
                 inst_dir_con = make_dir_constraint(inst_dir)
                 inst_geometries = ov.get("geometries", base_geometries)
+                inst_origin = ov.get("origin", base_origin)
 
             self.instance_types.append(inst_type)
-            self.instance_size_specs.append(inst_size)
             self.instance_colors.append(inst_color)
             self.instance_pool_indices.append(idx)
-            self.instance_geometries.append(inst_geometries)
 
             x = Int(f"x_{ctx.var}"); ctx.var += 1
             y = Int(f"y_{ctx.var}"); ctx.var += 1
@@ -366,6 +364,11 @@ class GroupPlacement:
 
             if inst_dir_con is not None:
                 solver.add(Implies(active, inst_dir_con(d)))
+
+            if "x" in inst_origin:
+                solver.add(Implies(active, range_expr(-ox, inst_origin["x"])))
+            if "y" in inst_origin:
+                solver.add(Implies(active, range_expr(-oy, inst_origin["y"])))
 
             is_singleton = (idx != -1 and idx < len(pool) and pool[idx].get("singleton", False))
             if is_singleton:
@@ -411,12 +414,7 @@ class GroupPlacement:
                     child_list.append(child)
             self.child_groups.append(child_list)
 
-        # Size constraints
-        for i in range(self.max_count):
-            inst = self.instances[i]
-            typ = self.instance_types[i]
-            sz = self.instance_size_specs[i]
-            active = i < self.count_var
+            sz = inst_size
             if sz:
                 xmin, xmax, ymin, ymax = inst.aabb()
                 ext_w = xmax - xmin + 1
@@ -445,12 +443,10 @@ class GroupPlacement:
                     a_min, a_max, _ = parse_range(area_spec)
                     c.append(And(ext_w * ext_h >= a_min, ext_w * ext_h <= a_max))
                 if c: solver.add(Implies(active, And(c)))
-            elif typ == "Point":
+            elif inst_type == "Point":
                 solver.add(Implies(active, And(inst.w == 1, inst.h == 1)))
-            elif typ == "Line":
-                solver.add(Implies(active, And(inst.h == 1, inst.w >= 1)))
-            elif typ == "Diagonal":
-                solver.add(Implies(active, inst.w == inst.h))
+            elif inst_type == "Line":
+                solver.add(Implies(active, And(inst.h == 1)))
 
         self._add_strategy_constraints()
 
@@ -597,8 +593,14 @@ class GroupPlacement:
             }
             if typ == "Rectangle":
                 item["vertices"] = [[ox, oy], [ox + w - 1, oy], [ox + w - 1, oy + h - 1], [ox, oy + h - 1]]
-            elif typ in ["Line", "Diagonal"]:
+            elif typ == "Line":
+                item["ox"] = ox
+                item["oy"] = oy
                 item["length"] = w
+            elif typ == "Diagonal":
+                item["ox"] = ox
+                item["oy"] = oy
+                item["length"] = min(w, h)
 
             pool = spec.get("pool", [])
             idx = self.instance_pool_indices[i]
@@ -830,7 +832,7 @@ if __name__ == "__main__":
             },
             {
                 "color": 4,
-                "count": 4,
+                "count": 2,
                 "gap": 1,
                 "strategy": "random",
                 "pool": [
@@ -840,7 +842,9 @@ if __name__ == "__main__":
                 "prefix": [0, 1],
                 "weight": 0,
                 "type": "Line",
+                "dir": 2,
                 "size": { "width": [1, 5, 2], "top": [0, 3], "bottom": 1 },
+                "origin": { "x": 5, "y": 1 },
                 "geometries": [
                     #{"type": "Point", "count": [3,6], "strategy": "tree"}
                 ]
