@@ -201,7 +201,6 @@ class Instance:
         self.d = d
 
     def aabb(self):
-        """Axis‑aligned bounding box of the rotated shape in parent coords."""
         c1 = (self.ox, self.oy)
         c2 = (self.ox + self.w - 1, self.oy)
         c3 = (self.ox, self.oy + self.h - 1)
@@ -223,7 +222,6 @@ class Instance:
         return min_x, max_x, min_y, max_y
 
     def concrete_aabb(self, model):
-        """Evaluate AABB using the solved model (returns concrete ints)."""
         min_x = model.evaluate(self.aabb()[0]).as_long()
         max_x = model.evaluate(self.aabb()[1]).as_long()
         min_y = model.evaluate(self.aabb()[2]).as_long()
@@ -446,14 +444,9 @@ class GroupPlacement:
 
         self._add_strategy_constraints()
 
-    # ------------------------------------------------------------
-    # Link options using AABB (works for any orientation)
-    # ------------------------------------------------------------
     def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
         adj = []
-        a = insts[j]   # parent
-        b = insts[i]   # child
-
+        a = insts[j]; b = insts[i]
         a_min_x, a_max_x, a_min_y, a_max_y = a.aabb()
         b_min_x, b_max_x, b_min_y, b_max_y = b.aabb()
 
@@ -470,7 +463,6 @@ class GroupPlacement:
             adj.append(And(cond,
                            a_min_y == b_max_y + lvar + 1,
                            a_min_x < b_max_x, b_min_x < a_max_x))
-
         if "Diagonal" in allowed_types:
             adj.append(And(cond,
                            b_min_x == a_max_x + lvar + 1,
@@ -497,14 +489,12 @@ class GroupPlacement:
         insts = self.instances
         margin = self.margin
 
-        # Helper: expanded AABB (with margin) for placement
         def aabb_edges(inst):
             if margin > 0:
                 return inst.expanded_aabb(margin)
             else:
                 return inst.aabb()
 
-        # Global non‑overlap for random/tree/chain/star – uses expanded AABBs
         if strategy in ("random", "tree", "chain", "star"):
             for i in range(max_n):
                 for j in range(i + 1, max_n):
@@ -565,7 +555,6 @@ class GroupPlacement:
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
 
         elif strategy in ("tree", "chain", "star"):
-            # links still use raw AABB
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
@@ -752,7 +741,7 @@ class PuzzleGen:
         }
 
 # ==========================================
-# 8. EXECUTION
+# 8. EXECUTION 
 # ==========================================
 if __name__ == "__main__":
     generative_spec = {
