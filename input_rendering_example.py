@@ -407,7 +407,7 @@ class GroupPlacement:
                     child = GroupPlacement(child_spec,
                                            parent_bounds=(ox, oy, w, h),
                                            solver=solver, ctx=ctx,
-                                           inherited_color=self.resolved_color)
+                                           inherited_color=inst_color if inst_color is not None else self.resolved_color)
                     child_list.append(child)
             self.child_groups.append(child_list)
 
@@ -417,9 +417,7 @@ class GroupPlacement:
             typ = self.instance_types[i]
             sz = self.instance_size_specs[i]
             active = i < self.count_var
-            if typ == "Point" and not sz:
-                solver.add(Implies(active, And(inst.w == 1, inst.h == 1)))
-            elif sz:
+            if sz:
                 xmin, xmax, ymin, ymax = inst.aabb()
                 ext_w = xmax - xmin + 1
                 ext_h = ymax - ymin + 1
@@ -443,6 +441,12 @@ class GroupPlacement:
                     a_min, a_max, _ = parse_range(area_spec)
                     c.append(And(ext_w * ext_h >= a_min, ext_w * ext_h <= a_max))
                 if c: solver.add(Implies(active, And(c)))
+            elif typ == "Point":
+                solver.add(Implies(active, And(inst.w == 1, inst.h == 1)))
+            elif typ == "Line":
+                solver.add(Implies(active, And(inst.h == 1, inst.w >= 1)))
+            elif typ == "Diagonal":
+                solver.add(Implies(active, inst.w == inst.h))
 
         self._add_strategy_constraints()
 
@@ -576,17 +580,21 @@ class GroupPlacement:
 
             color = (roll_range(self.instance_colors[i]) if self.instance_colors[i] is not None
                      else roll_range(spec.get("color", self.inherited_color)))
+            
+            type_mapping = {
+                "Rectangle": "Polygon",
+            }
 
             item = {
-                "type": "Polygon",
+                "type": type_mapping.get(typ, typ),
                 "x": x, "y": y, "dir": d_val,
                 "color": color,
                 "geometries": []
             }
             if typ == "Rectangle":
                 item["vertices"] = [[ox, oy], [ox + w - 1, oy], [ox + w - 1, oy + h - 1], [ox, oy + h - 1]]
-            elif typ == "Point":
-                item = {"type": "Point", "x": x, "y": y, "dir": d_val, "color": color, "geometries": []}
+            elif typ in ["Line", "Diagonal"]:
+                item["length"] = w
 
             pool = spec.get("pool", [])
             idx = self.instance_pool_indices[i]
@@ -824,21 +832,22 @@ if __name__ == "__main__":
                 "strategy": "flow",
                 "type": "Geometry",
                 "pool": [
-                    { "singleton": True, "weight": 1 },
-                    { "singleton": True, "weight": 2 }
+                    { "singleton": True, "weight": 1, "color": 6, },
+                    { "singleton": True, "weight": 2, "color": 7, }
                 ],
                 "prefix": [0, 1],
                 "weight": 0,
-                "type": "Rectangle",
+                "type": "Line",
                 "size": {"width": [3, 3, 2], "height": [3, 3, 2], "ratio": 1},
                 "geometries": [
-                    {"type": "Point", "color": [5,7], "count": [3,6], "strategy": "tree"}
+                    #{"type": "Point", "count": [3,6], "strategy": "tree"}
                 ]
             }
         ]
     }
 
     exact = PuzzleGen.generate_exact_spec(generative_spec)
+    print(exact)
     grid_in = Canvas.parse_canvas(exact).render()
 
     def fill_container(node):
