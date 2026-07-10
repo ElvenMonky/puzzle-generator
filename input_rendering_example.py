@@ -222,6 +222,14 @@ class Instance:
         max_y = z3_max(wy1, wy2, wy3, wy4)
         return min_x, max_x, min_y, max_y
 
+    def concrete_aabb(self, model):
+        """Evaluate AABB using the solved model (returns concrete ints)."""
+        min_x = model.evaluate(self.aabb()[0]).as_long()
+        max_x = model.evaluate(self.aabb()[1]).as_long()
+        min_y = model.evaluate(self.aabb()[2]).as_long()
+        max_y = model.evaluate(self.aabb()[3]).as_long()
+        return min_x, max_x, min_y, max_y
+
 # ==========================================
 # 6. GROUP PLACEMENT ENGINE
 # ==========================================
@@ -375,25 +383,49 @@ class GroupPlacement:
 
         self._add_strategy_constraints()
 
+    # ------------------------------------------------------------
+    # Link options using AABB (works for any orientation)
+    # ------------------------------------------------------------
     def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
         adj = []
-        a = insts[j]; b = insts[i]
+        a = insts[j]   # parent
+        b = insts[i]   # child
+
+        a_min_x, a_max_x, a_min_y, a_max_y = a.aabb()
+        b_min_x, b_max_x, b_min_y, b_max_y = b.aabb()
+
         if "Line" in allowed_types:
-            adj.append(And(cond, b.x == a.x + a.w + lvar, a.y < b.y + b.h, b.y < a.y + a.h))
-            adj.append(And(cond, a.x == b.x + b.w + lvar, a.y < b.y + b.h, b.y < a.y + a.h))
-            adj.append(And(cond, b.y == a.y + a.h + lvar, a.x < b.x + b.w, b.x < a.x + a.w))
-            adj.append(And(cond, a.y == b.y + b.h + lvar, a.x < b.x + b.w, b.x < a.x + a.w))
+            adj.append(And(cond,
+                           b_min_x == a_max_x + lvar + 1,
+                           a_min_y < b_max_y, b_min_y < a_max_y))
+            adj.append(And(cond,
+                           a_min_x == b_max_x + lvar + 1,
+                           a_min_y < b_max_y, b_min_y < a_max_y))
+            adj.append(And(cond,
+                           b_min_y == a_max_y + lvar + 1,
+                           a_min_x < b_max_x, b_min_x < a_max_x))
+            adj.append(And(cond,
+                           a_min_y == b_max_y + lvar + 1,
+                           a_min_x < b_max_x, b_min_x < a_max_x))
+
         if "Diagonal" in allowed_types:
-            adj.append(And(cond, b.x == a.x + a.w + lvar, b.y == a.y + a.h + lvar))
-            adj.append(And(cond, b.x + b.w == a.x - lvar, b.y == a.y + a.h + lvar))
-            adj.append(And(cond, a.x == b.x + b.w + lvar, a.y == b.y + b.h + lvar))
-            adj.append(And(cond, b.x == a.x + a.w + lvar, b.y + b.h == a.y - lvar))
+            adj.append(And(cond,
+                           b_min_x == a_max_x + lvar + 1,
+                           b_min_y == a_max_y + lvar + 1))
+            adj.append(And(cond,
+                           b_max_x == a_min_x - lvar - 1,
+                           b_min_y == a_max_y + lvar + 1))
+            adj.append(And(cond,
+                           a_min_x == b_max_x + lvar + 1,
+                           a_min_y == b_max_y + lvar + 1))
+            adj.append(And(cond,
+                           b_min_x == a_max_x + lvar + 1,
+                           b_max_y == a_min_y - lvar - 1))
         return adj
 
     def _add_strategy_constraints(self):
-        if not len(self.instances):
+        if not self.instances:
             return
-        
         strategy = self.spec.get("strategy", "random")
         gap = self.spec.get("gap", 0)
         max_n = self.max_count
@@ -468,9 +500,12 @@ class GroupPlacement:
                     lvar = Int(f"link_{self.ctx.var}"); self.ctx.var += 1
                     self.link_vars.append(lvar)
                     self.solver.add(Implies(i < cnt, range_expr(lvar, link_spec["length"])))
-                    if strategy == "tree": parent_indices = range(i)
-                    elif strategy == "chain": parent_indices = [i - 1]
-                    elif strategy == "star": parent_indices = [0]
+                    if strategy == "tree":
+                        parent_indices = range(i)
+                    elif strategy == "chain":
+                        parent_indices = [i - 1]
+                    elif strategy == "star":
+                        parent_indices = [0]
                     adj = []
                     for j in parent_indices:
                         cond = And(j < cnt, i < cnt)
@@ -516,54 +551,71 @@ class GroupPlacement:
 
     def _extract_links(self, model, count_val):
         geoms = []
-        link_spec = self.spec["link"]
-        link_color = roll_range(link_spec["color"] if "color" in link_spec else self.resolved_color)
+        spec = self.spec
+        link_spec = spec["link"]
+        link_color = roll_range(link_spec.get("color", self.resolved_color))
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-        strategy = self.spec.get("strategy")
+        strategy = spec.get("strategy")
+
         for i in range(1, count_val):
             child = self.instances[i]
-            cx = model[child.x].as_long(); cy = model[child.y].as_long()
-            cw = model[child.w].as_long(); ch = model[child.h].as_long()
-            lvar = self.link_vars[i-1]; link_len = model[lvar].as_long()
+            cx_min, cx_max, cy_min, cy_max = child.concrete_aabb(model)
+            lvar = self.link_vars[i - 1]
+            link_len = model[lvar].as_long()
             found = False
-            if strategy == "tree": parent_indices = list(range(i))
-            elif strategy == "chain": parent_indices = [i-1]
-            elif strategy == "star": parent_indices = [0]
-            else: continue
+
+            if strategy == "tree":
+                parent_indices = list(range(i))
+            elif strategy == "chain":
+                parent_indices = [i - 1]
+            elif strategy == "star":
+                parent_indices = [0]
+            else:
+                continue
+
             for j in parent_indices:
                 if found: break
                 parent = self.instances[j]
-                px = model[parent.x].as_long(); py = model[parent.y].as_long()
-                pw = model[parent.w].as_long(); ph = model[parent.h].as_long()
+                px_min, px_max, py_min, py_max = parent.concrete_aabb(model)
+
                 if "Line" in allowed_types:
-                    if cx == px + pw + link_len and cy + ch > py and py + ph > cy:
-                        start_y = max(cy, py) + (min(cy+ch, py+ph) - max(cy, py)) // 2
-                        geoms.append({"type":"Line", "x":px+pw, "y":start_y, "length":link_len, "dir":0, "color":link_color})
+                    if cx_min == px_max + link_len + 1 and py_min < cy_max and cy_min < py_max:
+                        start_y = max(cy_min, py_min) + (min(cy_max, py_max) - max(cy_min, py_min)) // 2
+                        geoms.append({"type": "Line", "x": px_max + 1, "y": start_y,
+                                      "length": link_len, "dir": 0, "color": link_color})
                         found = True; break
-                    if px == cx + cw + link_len and cy + ch > py and py + ph > cy:
-                        start_y = max(cy, py) + (min(cy+ch, py+ph) - max(cy, py)) // 2
-                        geoms.append({"type":"Line", "x":px-1, "y":start_y, "length":link_len, "dir":2, "color":link_color})
+                    if px_min == cx_max + link_len + 1 and py_min < cy_max and cy_min < py_max:
+                        start_y = max(cy_min, py_min) + (min(cy_max, py_max) - max(cy_min, py_min)) // 2
+                        geoms.append({"type": "Line", "x": px_min - 1, "y": start_y,
+                                      "length": link_len, "dir": 2, "color": link_color})
                         found = True; break
-                    if cy == py + ph + link_len and cx + cw > px and px + pw > cx:
-                        start_x = max(cx, px) + (min(cx+cw, px+pw) - max(cx, px)) // 2
-                        geoms.append({"type":"Line", "x":start_x, "y":py+ph, "length":link_len, "dir":1, "color":link_color})
+                    if cy_min == py_max + link_len + 1 and px_min < cx_max and cx_min < px_max:
+                        start_x = max(cx_min, px_min) + (min(cx_max, px_max) - max(cx_min, px_min)) // 2
+                        geoms.append({"type": "Line", "x": start_x, "y": py_max + 1,
+                                      "length": link_len, "dir": 1, "color": link_color})
                         found = True; break
-                    if py == cy + ch + link_len and cx + cw > px and px + pw > cx:
-                        start_x = max(cx, px) + (min(cx+cw, px+pw) - max(cx, px)) // 2
-                        geoms.append({"type":"Line", "x":start_x, "y":py-1, "length":link_len, "dir":3, "color":link_color})
+                    if py_min == cy_max + link_len + 1 and px_min < cx_max and cx_min < px_max:
+                        start_x = max(cx_min, px_min) + (min(cx_max, px_max) - max(cx_min, px_min)) // 2
+                        geoms.append({"type": "Line", "x": start_x, "y": py_min - 1,
+                                      "length": link_len, "dir": 3, "color": link_color})
                         found = True; break
+
                 if "Diagonal" in allowed_types and not found:
-                    if cx == px + pw + link_len and cy == py + ph + link_len:
-                        geoms.append({"type":"Diagonal", "x":px+pw, "y":py+ph, "length":link_len, "dir":0, "color":link_color})
+                    if cx_min == px_max + link_len + 1 and cy_min == py_max + link_len + 1:
+                        geoms.append({"type": "Diagonal", "x": px_max + 1, "y": py_max + 1,
+                                      "length": link_len, "dir": 0, "color": link_color})
                         found = True; break
-                    if cx + cw == px - link_len and cy == py + ph + link_len:
-                        geoms.append({"type":"Diagonal", "x":px-1, "y":py+ph, "length":link_len, "dir":1, "color":link_color})
+                    if cx_max == px_min - link_len - 1 and cy_min == py_max + link_len + 1:
+                        geoms.append({"type": "Diagonal", "x": px_min - 1, "y": py_max + 1,
+                                      "length": link_len, "dir": 1, "color": link_color})
                         found = True; break
-                    if px == cx + cw + link_len and py == cy + ch + link_len:
-                        geoms.append({"type":"Diagonal", "x":px-1, "y":py-1, "length":link_len, "dir":2, "color":link_color})
+                    if px_min == cx_max + link_len + 1 and py_min == cy_max + link_len + 1:
+                        geoms.append({"type": "Diagonal", "x": px_min - 1, "y": py_min - 1,
+                                      "length": link_len, "dir": 2, "color": link_color})
                         found = True; break
-                    if cx == px + pw + link_len and cy + ch == py - link_len:
-                        geoms.append({"type":"Diagonal", "x":px+pw, "y":py-1, "length":link_len, "dir":3, "color":link_color})
+                    if cx_min == px_max + link_len + 1 and cy_max == py_min - link_len - 1:
+                        geoms.append({"type": "Diagonal", "x": px_max + 1, "y": py_min - 1,
+                                      "length": link_len, "dir": 3, "color": link_color})
                         found = True; break
         return geoms
 
@@ -641,7 +693,6 @@ if __name__ == "__main__":
             {
                 "color": 1,
                 "count": [2, 5],
-                "dir": 0,
                 "gap": 2,
                 "size": {"min": [3, 9], "max": [7, 15]},
                 "strategy": "random",
@@ -650,13 +701,12 @@ if __name__ == "__main__":
                     {
                         "count": [2, 9],
                         "gap": 1,
-                        "dir": 0,
                         "link": {
                             "types": ["Line", "Diagonal"],
                             "length": [1, 3],
                             "color": 2
                         },
-                        "size": {"width": [5, 5], "height": [3, 3]},
+                        "size": {"min": [3, 5], "max": [3, 9]},
                         "strategy": "tree",
                         "type": "Rectangle",
                     },
