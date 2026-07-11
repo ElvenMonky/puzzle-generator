@@ -226,10 +226,6 @@ class Instance:
         max_y = model.evaluate(self.aabb()[3]).as_long()
         return min_x, max_x, min_y, max_y
 
-    def expanded_aabb(self, margin):
-        min_x, max_x, min_y, max_y = self.aabb()
-        return min_x - margin, max_x + margin, min_y - margin, max_y + margin
-
 # ==========================================
 # 6. GROUP PLACEMENT ENGINE
 # ==========================================
@@ -263,11 +259,15 @@ class GroupPlacement:
         base_type = spec.get("type", "Geometry")
         base_size = spec.get("size", {})
         base_color = spec.get("color")
-        base_dir = spec.get("dir", None)
+        base_dir = spec.get("dir", 0)
         base_geometries = spec.get("geometries", [])
         base_origin = spec.get("origin", {})
 
         self.margin = roll_range(spec.get("margin", 0))
+        self.px += self.margin
+        self.py += self.py + self.margin
+        self.pw -= 2 * self.margin
+        self.ph -= 2 * self.margin
 
         self.instance_types = []
         self.instance_colors = []
@@ -292,7 +292,6 @@ class GroupPlacement:
             else:
                 idx = -1
 
-            inst_origin = base_origin
 
             if idx == -1 or idx >= len(pool):
                 base_w = spec.get("weight", 1)
@@ -328,6 +327,7 @@ class GroupPlacement:
                     inst_dir = base_dir
                     inst_dir_con = dir_constraint
                     inst_geometries = base_geometries
+                    inst_origin = base_origin
             else:
                 ov = pool[idx]
                 inst_type = ov.get("type", base_type)
@@ -384,11 +384,10 @@ class GroupPlacement:
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
-            exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
-            solver.add(Implies(active, And(exmin >= self.px, exmax < self.px + self.pw,
-                                           eymin >= self.py, eymax < self.py + self.ph)))
-
             xmin, xmax, ymin, ymax = inst.aabb()
+            solver.add(Implies(active, And(xmin >= self.px, xmax < self.px + self.pw,
+                                           ymin >= self.py, ymax < self.py + self.ph)))
+
             ext_w = xmax - xmin + 1
             ext_h = ymax - ymin + 1
             solver.add(Implies(active, Or(
@@ -470,14 +469,11 @@ class GroupPlacement:
         cnt = self.count_var
         insts = self.instances
 
-        def aabb_edges(inst):
-            return inst.aabb()
-
         if strategy in ("random", "tree", "chain", "star"):
             for i in range(max_n):
                 for j in range(i + 1, max_n):
-                    xi_min, xi_max, yi_min, yi_max = aabb_edges(insts[i])
-                    xj_min, xj_max, yj_min, yj_max = aabb_edges(insts[j])
+                    xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
+                    xj_min, xj_max, yj_min, yj_max = insts[j].aabb()
                     self.solver.add(
                         Implies(And(i < cnt, j < cnt),
                                 Or(xi_max + gap < xj_min,
@@ -491,13 +487,13 @@ class GroupPlacement:
         elif strategy == "row":
             for i in range(max_n):
                 inst = insts[i]
-                xi_min, xi_max, yi_min, yi_max = aabb_edges(inst)
+                xi_min, xi_max, yi_min, yi_max = inst.aabb()
                 self.solver.add(Implies(i < cnt, yi_min == self.py))
                 if i == 0:
                     self.solver.add(Implies(i < cnt, xi_min == self.px))
                 else:
                     prev = insts[i-1]
-                    _, prev_xmax, _, _ = aabb_edges(prev)
+                    _, prev_xmax, _, _ = prev.aabb()
                     self.solver.add(Implies(i < cnt, xi_min == prev_xmax + gap + 1))
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
                 self.solver.add(Implies(i < cnt, xi_max < self.px + self.pw))
@@ -507,17 +503,17 @@ class GroupPlacement:
             self.solver.add(row_height >= 0)
             for i in range(max_n):
                 inst = insts[i]
-                _, _, yi_min, yi_max = aabb_edges(inst)
+                _, _, yi_min, yi_max = inst.aabb()
                 self.solver.add(Implies(i < cnt, yi_max - yi_min + 1 <= row_height))
 
             first = insts[0]
-            x0_min, _, y0_min, _ = aabb_edges(first)
+            x0_min, _, y0_min, _ = first.aabb()
             self.solver.add(Implies(0 < cnt, And(x0_min == self.px, y0_min == self.py)))
 
             for i in range(1, max_n):
                 prev = insts[i-1]; curr = insts[i]
-                _, prev_xmax, prev_ymin, _ = aabb_edges(prev)
-                curr_xmin, curr_xmax, curr_ymin, _ = aabb_edges(curr)
+                _, prev_xmax, prev_ymin, _ = prev.aabb()
+                curr_xmin, curr_xmax, curr_ymin, _ = curr.aabb()
                 curr_width = curr_xmax - curr_xmin + 1
                 fits = (prev_xmax + gap + 1 + curr_width <= self.px + self.pw)
                 self.solver.add(
@@ -529,7 +525,7 @@ class GroupPlacement:
 
             for i in range(max_n):
                 inst = insts[i]
-                _, _, _, yi_max = aabb_edges(inst)
+                _, _, _, yi_max = inst.aabb()
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
 
         elif strategy in ("tree", "chain", "star"):
@@ -696,6 +692,7 @@ class PuzzleGen:
     @classmethod
     def generate_exact_spec(cls, gen_spec):
         w_spec = gen_spec["width"]; h_spec = gen_spec["height"]
+        back_spec = roll_range(gen_spec.get("background", 0))
         min_w = w_spec[0] if isinstance(w_spec, list) else w_spec
         max_w = w_spec[1] if isinstance(w_spec, list) else w_spec
         min_h = h_spec[0] if isinstance(h_spec, list) else h_spec
@@ -738,7 +735,7 @@ class PuzzleGen:
         return {
             "width": canvas_w_val,
             "height": canvas_h_val,
-            "background": 0,
+            "background": back_spec,
             "layers": layers_geoms
         }
 
@@ -748,20 +745,20 @@ class PuzzleGen:
 if __name__ == "__main__":
     generative_spec = {
         "type": "Canvas",
-        "width": 32,
-        "height": 32,
+        "width": 31,
+        "height": 31,
+        "background": 5,
         "layers": [
             {
                 "count": 4,
-                "gap": 2,
+                "gap": 1,
                 "size": { "width": 15, "height": 15 },
                 "strategy": "flow",
                 "type": "Rectangle",
-                "color": 1,
+                "color": 0,
                 "prefix": [0, 1, 2],
                 "pool": [
                     {
-                        "type": "Geometry",
                         "geometries": [
                             {
                                 "color": 1,
@@ -793,12 +790,12 @@ if __name__ == "__main__":
                         ]
                     },
                     {
-                        "type": "Geometry",
                         "geometries": [
                             {
-                                "count": 1,
+                                "color": 9,
+                                "count": 4,
+                                "gap": 3,
                                 "margin": 1,
-                                #"margin": 1,
                                 "size": {
                                     "width": 5,
                                     "height": 5,
@@ -822,11 +819,11 @@ if __name__ == "__main__":
                         ]
                     },
                     {
-                        "type": "Geometry",
                         "geometries": [
                             {
                                 "color": 9,
                                 "count": 9,
+                                "margin": 1,
                                 "gap": 1,
                                 "strategy": "star",
                                 "pool": [
