@@ -49,13 +49,14 @@ class Point(Geometry):
     def get_local_points(self): return [(0, 0, self.color)]
 
 class Line(Geometry):
-    def __init__(self, x=0, y=0, dir=0, length=1, ox=0, oy=0, dy=0, color=None, geometries=None):
+    def __init__(self, x=0, y=0, dir=0, length=1, dx=1, dy=0, ox=0, oy=0, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.length = length
         self.ox = ox
         self.oy = oy
+        self.dx = dx
         self.dy = dy
-    def get_local_points(self): return [(i+self.ox, self.dy*i+self.oy, self.color) for i in range(self.length)]
+    def get_local_points(self): return [(self.dx*i+self.ox, self.dy*i+self.oy, self.color) for i in range(self.length)]
 
 class Polygon(Geometry):
     def __init__(self, x=0, y=0, dir=0, fill_color=None, vertices=None, color=None, geometries=None):
@@ -93,8 +94,8 @@ class Canvas:
         d = g_spec.get("dir", 0)
         subs = [Canvas.parse_geometry(s) for s in g_spec.get("geometries", [])]
         if t == "Polygon": return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertices=g_spec.get("vertices", []), geometries=subs)
-        elif t == "Line": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), dy=0, color=c, geometries=subs)
-        elif t == "Diagonal": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), dy=1, color=c, geometries=subs)
+        elif t == "Line": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), dy=0, ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), color=c, geometries=subs)
+        elif t == "Diagonal": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), dy=1, ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), color=c, geometries=subs)
         elif t == "Point": return Point(x=x, y=y, dir=d, color=c, geometries=subs)
         return Geometry(x=x, y=y, dir=d, color=c, geometries=subs)
 
@@ -266,13 +267,7 @@ class GroupPlacement:
         base_geometries = spec.get("geometries", [])
         base_origin = spec.get("origin", {})
 
-        margin_spec = spec.get("margin", 0)
-        if isinstance(margin_spec, (int, float)):
-            self.margin = int(margin_spec)
-        elif isinstance(margin_spec, list):
-            self.margin = roll_range(margin_spec)
-        else:
-            self.margin = 0
+        self.margin = roll_range(spec.get("margin", 0))
 
         self.instance_types = []
         self.instance_colors = []
@@ -389,10 +384,7 @@ class GroupPlacement:
             inst = Instance(x, y, ox, oy, w, h, d)
             self.instances.append(inst)
 
-            if self.margin > 0:
-                exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
-            else:
-                exmin, exmax, eymin, eymax = inst.aabb()
+            exmin, exmax, eymin, eymax = inst.expanded_aabb(self.margin)
             solver.add(Implies(active, And(exmin >= self.px, exmax < self.px + self.pw,
                                            eymin >= self.py, eymax < self.py + self.ph)))
 
@@ -477,13 +469,9 @@ class GroupPlacement:
         max_n = self.max_count
         cnt = self.count_var
         insts = self.instances
-        margin = self.margin
 
         def aabb_edges(inst):
-            if margin > 0:
-                return inst.expanded_aabb(margin)
-            else:
-                return inst.aabb()
+            return inst.aabb()
 
         if strategy in ("random", "tree", "chain", "star"):
             for i in range(max_n):
@@ -760,95 +748,103 @@ class PuzzleGen:
 if __name__ == "__main__":
     generative_spec = {
         "type": "Canvas",
-        "width": [16, 32],
-        "height": [16, 32],
+        "width": 32,
+        "height": 32,
         "layers": [
             {
-                "color": 1,
-                "count": 0, #[2, 5],
+                "count": 4,
                 "gap": 2,
-                "size": {"min": [3, 9], "max": [7, 15]},
-                "strategy": "random",
-                "type": "Geometry",
-                "geometries": [
-                    {
-                        "count": [2, 9],
-                        "gap": 1,
-                        "link": {
-                            "types": ["Line", "Diagonal"],
-                            "length": [1, 3],
-                            "color": 2
-                        },
-                        "size": {"min": [3, 5], "max": [3, 9]},
-                        "strategy": "tree",
-                        "type": "Rectangle",
-                    },
-                    {
-                        "type": "Point",
-                        "count": 1,
-                        "color": [2, 9]
-                    }
-                ]
-            },
-            {
-                "color": 2,
-                "count": 0,
-                "gap": 2,
-                "margin": 2,
-                "size": {
-                    "width": 10,
-                    "height": 7,
-                },
+                "size": { "width": 15, "height": 15 },
                 "strategy": "flow",
                 "type": "Rectangle",
-                "geometries": [
+                "color": 1,
+                "prefix": [0, 1, 2],
+                "pool": [
                     {
-                        "type": "Rectangle",
-                        "size": {
-                            "width": [1, 1],
-                            "height": [2, 2],
-                        },
-                        "gap": 1,
-                        "margin": 1,
-                        "strategy": "flow",
-                        "count": [2, 7, 2],
-                        "color": 3
+                        "type": "Geometry",
+                        "geometries": [
+                            {
+                                "color": 1,
+                                "count": [2, 4],
+                                "gap": 1,
+                                "size": {"min": [3, 7], "max": [7, 11]},
+                                "strategy": "random",
+                                "type": "Geometry",
+                                "geometries": [
+                                    {
+                                        "count": [2, 5],
+                                        "gap": 1,
+                                        "link": {
+                                            "types": ["Line", "Diagonal"],
+                                            "length": [1, 3],
+                                            "color": 2
+                                        },
+                                        "size": {"min": [3, 5], "max": [3, 7]},
+                                        "strategy": "tree",
+                                        "type": "Rectangle",
+                                    },
+                                    {
+                                        "type": "Point",
+                                        "count": 1,
+                                        "color": [3, 9]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Geometry",
+                        "geometries": [
+                            {
+                                "count": 1,
+                                "margin": 1,
+                                #"margin": 1,
+                                "size": {
+                                    "width": 5,
+                                    "height": 5,
+                                },
+                                "strategy": "flow",
+                                "type": "Rectangle",
+                                "geometries": [
+                                    {
+                                        "type": "Rectangle",
+                                        "size": {
+                                            "width": 2,
+                                            "height": 1,
+                                        },
+                                        "gap": 1,
+                                        "strategy": "flow",
+                                        "count": [1, 5],
+                                        "color": 3
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Geometry",
+                        "geometries": [
+                            {
+                                "color": 9,
+                                "count": 9,
+                                "gap": 1,
+                                "strategy": "star",
+                                "pool": [
+                                    { "type": "Point", "color": [3, 8] },
+                                    { "type": "Rectangle", "size": { "width": 3, "height": 3 } }
+                                ],
+                                "prefix": [0],
+                                "pattern": [1],
+                                "link": {
+                                    "types": ["Line", "Diagonal"],
+                                    "length": 3,
+                                    "color": 2
+                                }
+                            }
+                        ]
                     }
-                ]
-            },
-            {
-                "pool": [
-                    {"type": "Point", "weight": 2, "color": 5, "size": {"width": 1, "height": 1}},
-                    {"type": "Rectangle", "weight": 1, "size": {"width": [2,3], "height": [2,3]}, "color": 4},
-                    {"type": "Rectangle", "size": {"width": 4, "height": 4}, "color": 6}
                 ],
-                "prefix": [0, 0, 1],
-                #"pattern": [2, -1],
-                "count": 0,
-                "strategy": "flow",
-                "gap": 1,
-                "type": "Point",
-                "color": 2
             },
-            {
-                "color": 4,
-                "count": 2,
-                "gap": 1,
-                "strategy": "random",
-                "pool": [
-                    { "singleton": True, "weight": 1, "color": 6, },
-                    { "singleton": True, "weight": 2, "color": 7, }
-                ],
-                "prefix": [0, 1],
-                "weight": 0,
-                "type": "Line",
-                "dir": 2,
-                "size": { "width": [1, 5, 2], "top": [0, 3], "bottom": 1 },
-                "origin": { "x": 5, "y": 1 },
-                "geometries": [
-                    #{"type": "Point", "count": [3,6], "strategy": "tree"}
-                ]
-            }
         ]
     }
 
