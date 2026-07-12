@@ -83,6 +83,11 @@ class Polygon(Geometry):
                 for y in range(min(y0, y1), max(y0, y1)+1): points[y][x0] = self.color
             elif y0 == y1:
                 for x in range(min(x0, x1), max(x0, x1)+1): points[y0][x] = self.color
+            elif abs(x1 - x0) == abs(y1 - y0):
+                steps = abs(x1 - x0)
+                sx = 1 if x1 > x0 else -1
+                sy = 1 if y1 > y0 else -1
+                for s in range(steps + 1): points[y0 + s*sy][x0 + s*sx] = self.color
         if self.vertice_color is not None:
             for vx, vy in self.vertices:
                 points[vy][vx] = self.vertice_color
@@ -295,6 +300,7 @@ class GroupPlacement:
         self.instance_colors = []
         self.instance_fill_colors = []
         self.instance_vertice_colors = []
+        self.instance_origins = []
         self.instance_pool_indices = []
 
         singleton_first_vars = {}
@@ -366,6 +372,7 @@ class GroupPlacement:
             self.instance_colors.append(inst_color)
             self.instance_fill_colors.append(inst_fill_color)
             self.instance_vertice_colors.append(inst_vertice_color)
+            self.instance_origins.append(inst_origin)
             self.instance_pool_indices.append(idx)
 
             x = Int(f"x_{ctx.var}"); ctx.var += 1
@@ -653,6 +660,13 @@ class GroupPlacement:
                 for child_group in self.child_groups[i]:
                     item["geometries"].extend(child_group.extract_geometries(model))
 
+            inst_origin = self.instance_origins[i]
+            if "x" in inst_origin or "y" in inst_origin:
+                item["geometries"].append({
+                    "type": "Point", "x": 0, "y": 0, "dir": 0,
+                    "color": color, "geometries": []
+                })
+
             result.append(item)
 
         if spec.get("strategy") in ("tree", "chain", "star") and "link" in spec and count_val > 1:
@@ -899,12 +913,12 @@ if __name__ == "__main__":
                                 "color": 1,
                                 "count": [2, 4],
                                 "gap": 1,
-                                "size": {"min": [4, 7], "max": [5, 9]},
+                                "size": {"min": [5, 7], "max": [5, 9]},
                                 "strategy": "random",
                                 "type": "Rectangle",
                                 "fill_color": -1,
                                 "vertice_color": 2,
-                                "cut": {"tl":0, "tr":[1,5], "br":0, "bl":[2,4,2]}
+                                "cut": {"tl":0, "tr":[3,5], "br":0, "bl":[2,6,2]}
                             }
                         ]
                     },
