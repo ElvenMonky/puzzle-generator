@@ -253,6 +253,7 @@ class GroupPlacement:
         self.instances = []
         self.child_groups = []
         self.link_vars = []
+        self.link_parent_vars = {}
 
         self.resolved_color = spec["color"] if "color" in spec else inherited_color
 
@@ -265,7 +266,7 @@ class GroupPlacement:
 
         self.margin = roll_range(spec.get("margin", 0))
         self.px += self.margin
-        self.py += self.py + self.margin
+        self.py += self.margin
         self.pw -= 2 * self.margin
         self.ph -= 2 * self.margin
 
@@ -539,9 +540,16 @@ class GroupPlacement:
                     if strategy == "tree": parent_indices = range(i)
                     elif strategy == "chain": parent_indices = [i - 1]
                     elif strategy == "star": parent_indices = [0]
+                    if len(parent_indices) > 1:
+                        pvar = Int(f"parent_{self.ctx.var}"); self.ctx.var += 1
+                        self.link_parent_vars[i] = pvar
+                        self.solver.add(Implies(i < cnt, pvar < i))
+                    else:
+                        pvar = None
+
                     adj = []
                     for j in parent_indices:
-                        cond = And(j < cnt, i < cnt)
+                        cond = And(j < cnt, i < cnt) if pvar is None else And(j < cnt, i < cnt, pvar == j)
                         adj.extend(self._add_link_options(i, j, cond, lvar, allowed_types, insts))
                     self.solver.add(Implies(i < cnt, Or(adj)))
 
@@ -622,7 +630,7 @@ class GroupPlacement:
             found = False
 
             if strategy == "tree":
-                parent_indices = list(range(i))
+                parent_indices = [model[self.link_parent_vars[i]].as_long()] if i in self.link_parent_vars else [0]
             elif strategy == "chain":
                 parent_indices = [i - 1]
             elif strategy == "star":
