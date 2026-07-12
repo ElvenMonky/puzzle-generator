@@ -153,6 +153,19 @@ def add_range_constraint(var, spec, solver):
     if step > 1:
         solver.add((var - lo) % step == 0)
 
+def corner_points(ox, oy, w, h, cuts):
+    tl, tr, br, bl = cuts["tl"], cuts["tr"], cuts["br"], cuts["bl"]
+    pts = []
+    pts.append([ox + tl, oy])
+    pts.append([ox + w - 1 - tr, oy])
+    if tr: pts.append([ox + w - 1, oy + tr])
+    pts.append([ox + w - 1, oy + h - 1 - br])
+    if br: pts.append([ox + w - 1 - br, oy + h - 1])
+    pts.append([ox + bl, oy + h - 1])
+    if bl: pts.append([ox, oy + h - 1 - bl])
+    if tl: pts.append([ox, oy + tl])
+    return pts
+
 def range_expr(var, spec):
     lo, hi, step = parse_range(spec)
     if step == 1:
@@ -196,11 +209,12 @@ def z3_max(*vals):
 # 5. INSTANCE
 # ==========================================
 class Instance:
-    def __init__(self, x, y, ox, oy, w, h, d):
+    def __init__(self, x, y, ox, oy, w, h, d, cuts=None):
         self.x = x; self.y = y
         self.ox = ox; self.oy = oy
         self.w = w; self.h = h
         self.d = d
+        self.cuts = cuts or {}
 
     def aabb(self):
         c1 = (self.ox, self.oy)
@@ -266,6 +280,7 @@ class GroupPlacement:
         base_color = spec.get("color")
         base_fill_color = spec.get("fill_color")
         base_vertice_color = spec.get("vertice_color")
+        base_cut = spec.get("cut", {})
         base_dir = spec.get("dir", 0)
         base_geometries = spec.get("geometries", [])
         base_origin = spec.get("origin", {})
@@ -316,6 +331,7 @@ class GroupPlacement:
                         inst_color = p_item.get("color", base_color)
                         inst_fill_color = p_item.get("fill_color", base_fill_color)
                         inst_vertice_color = p_item.get("vertice_color", base_vertice_color)
+                        inst_cut = p_item.get("cut", base_cut)
                         inst_dir = p_item.get("dir", base_dir)
                         inst_geometries = p_item.get("geometries", base_geometries)
                         inst_origin = p_item.get("origin", base_origin)
@@ -329,6 +345,7 @@ class GroupPlacement:
                     inst_color = base_color
                     inst_fill_color = base_fill_color
                     inst_vertice_color = base_vertice_color
+                    inst_cut = base_cut
                     inst_dir = base_dir
                     inst_geometries = base_geometries
                     inst_origin = base_origin
@@ -340,6 +357,7 @@ class GroupPlacement:
                 inst_color = ov.get("color", base_color)
                 inst_fill_color = ov.get("fill_color", base_fill_color)
                 inst_vertice_color = ov.get("vertice_color", base_vertice_color)
+                inst_cut = ov.get("cut", base_cut)
                 inst_dir = ov.get("dir", base_dir)
                 inst_geometries = ov.get("geometries", base_geometries)
                 inst_origin = ov.get("origin", base_origin)
@@ -375,6 +393,17 @@ class GroupPlacement:
             else:
                 solver.add(Implies(active, oy == -(h / 2)))
 
+            cuts = {}
+            for corner in ("tl", "tr", "br", "bl"):
+                cv = Int(f"cut_{corner}_{ctx.var}"); ctx.var += 1
+                cuts[corner] = cv
+                solver.add(Implies(active, range_expr(cv, inst_cut.get(corner, 0))))
+                solver.add(Implies(active, cv >= 0))
+            solver.add(Implies(active, cuts["tl"] + cuts["tr"] <= w))
+            solver.add(Implies(active, cuts["bl"] + cuts["br"] <= w))
+            solver.add(Implies(active, cuts["tl"] + cuts["bl"] <= h))
+            solver.add(Implies(active, cuts["tr"] + cuts["br"] <= h))
+
             is_singleton = (idx != -1 and idx < len(pool) and pool[idx].get("singleton", False))
             if is_singleton:
                 if idx not in first_singleton_occurrence:
@@ -383,15 +412,16 @@ class GroupPlacement:
                 else:
                     use_children = False
                 if idx not in singleton_first_vars:
-                    singleton_first_vars[idx] = (ox, oy, w, h, d)
+                    singleton_first_vars[idx] = (ox, oy, w, h, d, cuts)
                 else:
-                    f_ox, f_oy, f_w, f_h, f_d = singleton_first_vars[idx]
+                    f_ox, f_oy, f_w, f_h, f_d, f_cuts = singleton_first_vars[idx]
                     solver.add(Implies(active, And(ox == f_ox, oy == f_oy,
-                                                   w == f_w, h == f_h, d == f_d)))
+                                                   w == f_w, h == f_h, d == f_d,
+                                                   *[cuts[c] == f_cuts[c] for c in cuts])))
             else:
                 use_children = True
 
-            inst = Instance(x, y, ox, oy, w, h, d)
+            inst = Instance(x, y, ox, oy, w, h, d, cuts=cuts)
             self.instances.append(inst)
 
             xmin, xmax, ymin, ymax = inst.aabb()
@@ -594,7 +624,8 @@ class GroupPlacement:
                 "geometries": []
             }
             if typ == "Rectangle":
-                item["vertices"] = [[ox, oy], [ox + w - 1, oy], [ox + w - 1, oy + h - 1], [ox, oy + h - 1]]
+                cut_vals = {c: model[v].as_long() for c, v in inst.cuts.items()}
+                item["vertices"] = corner_points(ox, oy, w, h, cut_vals)
                 if self.instance_fill_colors[i] is not None:
                     item["fill_color"] = roll_range(self.instance_fill_colors[i])
                 if self.instance_vertice_colors[i] is not None:
@@ -873,6 +904,7 @@ if __name__ == "__main__":
                                 "type": "Rectangle",
                                 "fill_color": -1,
                                 "vertice_color": 2,
+                                "cut": {"tl":0, "tr":[1,5], "br":0, "bl":[2,4,2]}
                             }
                         ]
                     },
