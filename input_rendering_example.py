@@ -9,14 +9,14 @@ from matplotlib.path import Path
 # 1. SHARED CONSTANTS & MATRICES
 # ==========================================
 DIR_MATRICES = [
-    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
+    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),   # 0: identity
+    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),  # 1: rot90
+    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int), # 2: rot180
+    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),  # 3: rot270
+    np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),  # 4: flip x
+    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),   # 5: diag flip
+    np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),  # 6: flip y
+    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int), # 7: antidiag flip
 ]
 
 ARC_COLORS = [
@@ -59,10 +59,11 @@ class Line(Geometry):
     def get_local_points(self): return [(self.dx*i+self.ox, self.dy*i+self.oy, self.color) for i in range(self.length)]
 
 class Polygon(Geometry):
-    def __init__(self, x=0, y=0, dir=0, fill_color=None, vertices=None, color=None, geometries=None):
+    def __init__(self, x=0, y=0, dir=0, fill_color=None, vertice_color=None, vertices=None, color=None, geometries=None):
         super().__init__(x, y, dir, color, geometries)
         self.vertices = vertices or []
         self.fill_color = fill_color
+        self.vertice_color = vertice_color
 
     def get_local_points(self):
         if not self.vertices: return []
@@ -82,6 +83,9 @@ class Polygon(Geometry):
                 for y in range(min(y0, y1), max(y0, y1)+1): points[y][x0] = self.color
             elif y0 == y1:
                 for x in range(min(x0, x1), max(x0, x1)+1): points[y0][x] = self.color
+        if self.vertice_color is not None:
+            for vx, vy in self.vertices:
+                points[vy][vx] = self.vertice_color
         return [(x, y, points[y][x]) for y in points for x in points[y]]
 
 class Canvas:
@@ -93,7 +97,7 @@ class Canvas:
         y = g_spec.get("y", 0)
         d = g_spec.get("dir", 0)
         subs = [Canvas.parse_geometry(s) for s in g_spec.get("geometries", [])]
-        if t == "Polygon": return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertices=g_spec.get("vertices", []), geometries=subs)
+        if t == "Polygon": return Polygon(x=x, y=y, dir=d, color=c, fill_color=g_spec.get("fill_color"), vertice_color=g_spec.get("vertice_color"), vertices=g_spec.get("vertices", []), geometries=subs)
         elif t == "Line": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), dy=0, ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), color=c, geometries=subs)
         elif t == "Diagonal": return Line(x=x, y=y, dir=d, length=g_spec.get("length", 1), dy=1, ox=g_spec.get("ox", 0), oy=g_spec.get("oy", 0), color=c, geometries=subs)
         elif t == "Point": return Point(x=x, y=y, dir=d, color=c, geometries=subs)
@@ -163,20 +167,20 @@ def rot_x(dx, dy, d):
            If(d==1, -dy,
            If(d==2, -dx,
            If(d==3,  dy,
-           If(d==4,  dy,
-           If(d==5, -dx,
-           If(d==6, -dy,
-                    dx)))))))
+           If(d==4, -dx,
+           If(d==5,  dy,
+           If(d==6,  dx,
+                     -dy)))))))
 
 def rot_y(dx, dy, d):
     return If(d==0, dy,
            If(d==1,  dx,
            If(d==2, -dy,
            If(d==3, -dx,
-           If(d==4,  dx,
-           If(d==5,  dy,
-           If(d==6, -dx,
-                    -dy)))))))
+           If(d==4,  dy,
+           If(d==5,  dx,
+           If(d==6, -dy,
+                     -dx)))))))
 
 def z3_min(*vals):
     m = vals[0]
@@ -260,6 +264,8 @@ class GroupPlacement:
         base_type = spec.get("type", "Geometry")
         base_size = spec.get("size", {})
         base_color = spec.get("color")
+        base_fill_color = spec.get("fill_color")
+        base_vertice_color = spec.get("vertice_color")
         base_dir = spec.get("dir", 0)
         base_geometries = spec.get("geometries", [])
         base_origin = spec.get("origin", {})
@@ -272,15 +278,10 @@ class GroupPlacement:
 
         self.instance_types = []
         self.instance_colors = []
+        self.instance_fill_colors = []
+        self.instance_vertice_colors = []
         self.instance_pool_indices = []
 
-        def make_dir_constraint(dir_val):
-            if dir_val is None: return None
-            if isinstance(dir_val, int): return lambda d: (d == dir_val)
-            if isinstance(dir_val, list): return lambda d: Or([d == v for v in dir_val])
-            return None
-
-        dir_constraint = make_dir_constraint(base_dir)
         singleton_first_vars = {}
         first_singleton_occurrence = {}
 
@@ -313,8 +314,9 @@ class GroupPlacement:
                         if isinstance(ov_type, list): ov_type = random.choice(ov_type)
                         inst_size = p_item.get("size", base_size)
                         inst_color = p_item.get("color", base_color)
+                        inst_fill_color = p_item.get("fill_color", base_fill_color)
+                        inst_vertice_color = p_item.get("vertice_color", base_vertice_color)
                         inst_dir = p_item.get("dir", base_dir)
-                        inst_dir_con = make_dir_constraint(inst_dir)
                         inst_geometries = p_item.get("geometries", base_geometries)
                         inst_origin = p_item.get("origin", base_origin)
                         inst_type = ov_type
@@ -325,8 +327,9 @@ class GroupPlacement:
                     inst_type = base_type if not isinstance(base_type, list) else random.choice(base_type)
                     inst_size = base_size
                     inst_color = base_color
+                    inst_fill_color = base_fill_color
+                    inst_vertice_color = base_vertice_color
                     inst_dir = base_dir
-                    inst_dir_con = dir_constraint
                     inst_geometries = base_geometries
                     inst_origin = base_origin
             else:
@@ -335,13 +338,16 @@ class GroupPlacement:
                 if isinstance(inst_type, list): inst_type = random.choice(inst_type)
                 inst_size = ov.get("size", base_size)
                 inst_color = ov.get("color", base_color)
+                inst_fill_color = ov.get("fill_color", base_fill_color)
+                inst_vertice_color = ov.get("vertice_color", base_vertice_color)
                 inst_dir = ov.get("dir", base_dir)
-                inst_dir_con = make_dir_constraint(inst_dir)
                 inst_geometries = ov.get("geometries", base_geometries)
                 inst_origin = ov.get("origin", base_origin)
 
             self.instance_types.append(inst_type)
             self.instance_colors.append(inst_color)
+            self.instance_fill_colors.append(inst_fill_color)
+            self.instance_vertice_colors.append(inst_vertice_color)
             self.instance_pool_indices.append(idx)
 
             x = Int(f"x_{ctx.var}"); ctx.var += 1
@@ -358,13 +364,16 @@ class GroupPlacement:
                               w >= 1, h >= 1, d >= 0, d <= 7),
                           And(ox == 0, oy == 0, x == 0, y == 0, w == 0, h == 0, d == 0)))
 
-            if inst_dir_con is not None:
-                solver.add(Implies(active, inst_dir_con(d)))
+            solver.add(Implies(active, range_expr(d, inst_dir)))
 
             if "x" in inst_origin:
                 solver.add(Implies(active, range_expr(-ox, inst_origin["x"])))
+            else:
+                solver.add(Implies(active, ox == -(w / 2)))
             if "y" in inst_origin:
                 solver.add(Implies(active, range_expr(-oy, inst_origin["y"])))
+            else:
+                solver.add(Implies(active, oy == -(h / 2)))
 
             is_singleton = (idx != -1 and idx < len(pool) and pool[idx].get("singleton", False))
             if is_singleton:
@@ -392,8 +401,8 @@ class GroupPlacement:
             ext_w = xmax - xmin + 1
             ext_h = ymax - ymin + 1
             solver.add(Implies(active, Or(
-                And(Or(d==0, d==2, d==5, d==7), w == ext_w, h == ext_h),
-                And(Or(d==1, d==3, d==4, d==6), w == ext_h, h == ext_w)
+                And(Or(d==0, d==2, d==4, d==6), w == ext_w, h == ext_h),
+                And(Or(d==1, d==3, d==5, d==7), w == ext_h, h == ext_w)
             )))
 
             child_list = []
@@ -442,22 +451,22 @@ class GroupPlacement:
 
         self._add_strategy_constraints()
 
-    def _add_link_options(self, i, j, cond, lvar, allowed_types, insts):
+    def _add_link_options(self, i, j, cond, gvar, allowed_types, insts):
         adj = []
         a = insts[j]; b = insts[i]
         a_min_x, a_max_x, a_min_y, a_max_y = a.aabb()
         b_min_x, b_max_x, b_min_y, b_max_y = b.aabb()
 
         if "Line" in allowed_types:
-            adj.append(And(cond, b_min_x == a_max_x + lvar + 1, a_min_y < b_max_y, b_min_y < a_max_y))
-            adj.append(And(cond, a_min_x == b_max_x + lvar + 1, a_min_y < b_max_y, b_min_y < a_max_y))
-            adj.append(And(cond, b_min_y == a_max_y + lvar + 1, a_min_x < b_max_x, b_min_x < a_max_x))
-            adj.append(And(cond, a_min_y == b_max_y + lvar + 1, a_min_x < b_max_x, b_min_x < a_max_x))
+            adj.append(And(cond, b_min_x == a_max_x + gvar + 1, a_min_y <= b.y, b.y <= a_max_y))
+            adj.append(And(cond, a_min_x == b_max_x + gvar + 1, a_min_y <= b.y, b.y <= a_max_y))
+            adj.append(And(cond, b_min_y == a_max_y + gvar + 1, a_min_x <= b.x, b.x <= a_max_x))
+            adj.append(And(cond, a_min_y == b_max_y + gvar + 1, a_min_x <= b.x, b.x <= a_max_x))
         if "Diagonal" in allowed_types:
-            adj.append(And(cond, b_min_x == a_max_x + lvar + 1, b_min_y == a_max_y + lvar + 1))
-            adj.append(And(cond, b_max_x == a_min_x - lvar - 1, b_min_y == a_max_y + lvar + 1))
-            adj.append(And(cond, a_min_x == b_max_x + lvar + 1, a_min_y == b_max_y + lvar + 1))
-            adj.append(And(cond, b_min_x == a_max_x + lvar + 1, b_max_y == a_min_y - lvar - 1))
+            adj.append(And(cond, b_min_x == a_max_x + gvar + 1, b_min_y == a_max_y + gvar + 1, b.x - a_max_x == b.y - a_max_y))
+            adj.append(And(cond, a_min_x == b_max_x + gvar + 1, b_min_y == a_max_y + gvar + 1, a_min_x - b.x == b.y - a_max_y))
+            adj.append(And(cond, a_min_x == b_max_x + gvar + 1, a_min_y == b_max_y + gvar + 1, a_min_x - b.x == a_min_y - b.y))
+            adj.append(And(cond, b_min_x == a_max_x + gvar + 1, a_min_y == b_max_y + gvar + 1, b.x - a_max_x == a_min_y - b.y))
         return adj
 
     def _add_strategy_constraints(self):
@@ -485,7 +494,7 @@ class GroupPlacement:
         if strategy == "random":
             pass
 
-        elif strategy == "row":
+        if strategy == "row":
             for i in range(max_n):
                 inst = insts[i]
                 xi_min, xi_max, yi_min, yi_max = inst.aabb()
@@ -499,7 +508,7 @@ class GroupPlacement:
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
                 self.solver.add(Implies(i < cnt, xi_max < self.px + self.pw))
 
-        elif strategy == "flow":
+        if strategy == "flow":
             row_height = Int(f"rowh_{self.ctx.var}"); self.ctx.var += 1
             self.solver.add(row_height >= 0)
             for i in range(max_n):
@@ -529,14 +538,15 @@ class GroupPlacement:
                 _, _, _, yi_max = inst.aabb()
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
 
-        elif strategy in ("tree", "chain", "star"):
+        if strategy in ("tree", "chain", "star"):
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
+                gap_spec = link_spec.get("gap", self.spec.get("gap", 0))
                 for i in range(1, max_n):
-                    lvar = Int(f"link_{self.ctx.var}"); self.ctx.var += 1
-                    self.link_vars.append(lvar)
-                    self.solver.add(Implies(i < cnt, range_expr(lvar, link_spec["length"])))
+                    gvar = Int(f"link_gap_{self.ctx.var}"); self.ctx.var += 1
+                    self.link_vars.append(gvar)
+                    self.solver.add(Implies(i < cnt, range_expr(gvar, gap_spec)))
                     if strategy == "tree": parent_indices = range(i)
                     elif strategy == "chain": parent_indices = [i - 1]
                     elif strategy == "star": parent_indices = [0]
@@ -550,7 +560,7 @@ class GroupPlacement:
                     adj = []
                     for j in parent_indices:
                         cond = And(j < cnt, i < cnt) if pvar is None else And(j < cnt, i < cnt, pvar == j)
-                        adj.extend(self._add_link_options(i, j, cond, lvar, allowed_types, insts))
+                        adj.extend(self._add_link_options(i, j, cond, gvar, allowed_types, insts))
                     self.solver.add(Implies(i < cnt, Or(adj)))
 
     def extract_geometries(self, model):
@@ -585,6 +595,10 @@ class GroupPlacement:
             }
             if typ == "Rectangle":
                 item["vertices"] = [[ox, oy], [ox + w - 1, oy], [ox + w - 1, oy + h - 1], [ox, oy + h - 1]]
+                if self.instance_fill_colors[i] is not None:
+                    item["fill_color"] = roll_range(self.instance_fill_colors[i])
+                if self.instance_vertice_colors[i] is not None:
+                    item["vertice_color"] = roll_range(self.instance_vertice_colors[i])
             elif typ == "Line":
                 item["ox"] = ox
                 item["oy"] = oy
@@ -611,22 +625,24 @@ class GroupPlacement:
             result.append(item)
 
         if spec.get("strategy") in ("tree", "chain", "star") and "link" in spec and count_val > 1:
-            result.extend(self._extract_links(model, count_val))
+            links = self._extract_links(model, count_val)
+            if spec["link"].get("above", 0) == 0:
+                result = links + result
+            else:
+                result.extend(links)
         return result
 
     def _extract_links(self, model, count_val):
         geoms = []
-        spec = self.spec
-        link_spec = spec["link"]
+        link_spec = self.spec["link"]
         link_color = roll_range(link_spec.get("color", self.resolved_color))
         allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-        strategy = spec.get("strategy")
+        strategy = self.spec.get("strategy")
 
         for i in range(1, count_val):
             child = self.instances[i]
-            cx_min, cx_max, cy_min, cy_max = child.concrete_aabb(model)
-            lvar = self.link_vars[i - 1]
-            link_len = model[lvar].as_long()
+            cx, cy = model[child.x].as_long(), model[child.y].as_long()
+            gap = model[self.link_vars[i - 1]].as_long()
             found = False
 
             if strategy == "tree":
@@ -642,45 +658,42 @@ class GroupPlacement:
                 if found: break
                 parent = self.instances[j]
                 px_min, px_max, py_min, py_max = parent.concrete_aabb(model)
+                bx_min, bx_max, by_min, by_max = child.concrete_aabb(model)
 
                 if "Line" in allowed_types:
-                    if cx_min == px_max + link_len + 1 and py_min < cy_max and cy_min < py_max:
-                        start_y = max(cy_min, py_min) + (min(cy_max, py_max) - max(cy_min, py_min)) // 2
-                        geoms.append({"type": "Line", "x": px_max + 1, "y": start_y,
-                                      "length": link_len, "dir": 0, "color": link_color})
+                    if bx_min == px_max + gap + 1 and py_min <= cy <= py_max:
+                        x0 = px_max + 1
+                        geoms.append({"type": "Line", "x": x0, "y": cy, "length": cx - x0 + 1, "dir": 0, "color": link_color})
                         found = True; break
-                    if px_min == cx_max + link_len + 1 and py_min < cy_max and cy_min < py_max:
-                        start_y = max(cy_min, py_min) + (min(cy_max, py_max) - max(cy_min, py_min)) // 2
-                        geoms.append({"type": "Line", "x": px_min - 1, "y": start_y,
-                                      "length": link_len, "dir": 2, "color": link_color})
+                    if px_min == bx_max + gap + 1 and py_min <= cy <= py_max:
+                        x0 = px_min - 1
+                        geoms.append({"type": "Line", "x": x0, "y": cy, "length": x0 - cx + 1, "dir": 2, "color": link_color})
                         found = True; break
-                    if cy_min == py_max + link_len + 1 and px_min < cx_max and cx_min < px_max:
-                        start_x = max(cx_min, px_min) + (min(cx_max, px_max) - max(cx_min, px_min)) // 2
-                        geoms.append({"type": "Line", "x": start_x, "y": py_max + 1,
-                                      "length": link_len, "dir": 1, "color": link_color})
+                    if by_min == py_max + gap + 1 and px_min <= cx <= px_max:
+                        y0 = py_max + 1
+                        geoms.append({"type": "Line", "x": cx, "y": y0, "length": cy - y0 + 1, "dir": 1, "color": link_color})
                         found = True; break
-                    if py_min == cy_max + link_len + 1 and px_min < cx_max and cx_min < px_max:
-                        start_x = max(cx_min, px_min) + (min(cx_max, px_max) - max(cx_min, px_min)) // 2
-                        geoms.append({"type": "Line", "x": start_x, "y": py_min - 1,
-                                      "length": link_len, "dir": 3, "color": link_color})
+                    if py_min == by_max + gap + 1 and px_min <= cx <= px_max:
+                        y0 = py_min - 1
+                        geoms.append({"type": "Line", "x": cx, "y": y0, "length": y0 - cy + 1, "dir": 3, "color": link_color})
                         found = True; break
 
                 if "Diagonal" in allowed_types and not found:
-                    if cx_min == px_max + link_len + 1 and cy_min == py_max + link_len + 1:
-                        geoms.append({"type": "Diagonal", "x": px_max + 1, "y": py_max + 1,
-                                      "length": link_len, "dir": 0, "color": link_color})
+                    if bx_min == px_max + gap + 1 and by_min == py_max + gap + 1:
+                        x0, y0 = px_max + 1, py_max + 1
+                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": cx - x0 + 1, "dir": 0, "color": link_color})
                         found = True; break
-                    if cx_max == px_min - link_len - 1 and cy_min == py_max + link_len + 1:
-                        geoms.append({"type": "Diagonal", "x": px_min - 1, "y": py_max + 1,
-                                      "length": link_len, "dir": 1, "color": link_color})
+                    if px_min == bx_max + gap + 1 and by_min == py_max + gap + 1:
+                        x0, y0 = px_min - 1, py_max + 1
+                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": x0 - cx + 1, "dir": 1, "color": link_color})
                         found = True; break
-                    if px_min == cx_max + link_len + 1 and py_min == cy_max + link_len + 1:
-                        geoms.append({"type": "Diagonal", "x": px_min - 1, "y": py_min - 1,
-                                      "length": link_len, "dir": 2, "color": link_color})
+                    if px_min == bx_max + gap + 1 and py_min == by_max + gap + 1:
+                        x0, y0 = px_min - 1, py_min - 1
+                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": x0 - cx + 1, "dir": 2, "color": link_color})
                         found = True; break
-                    if cx_min == px_max + link_len + 1 and cy_max == py_min - link_len - 1:
-                        geoms.append({"type": "Diagonal", "x": px_max + 1, "y": py_min - 1,
-                                      "length": link_len, "dir": 3, "color": link_color})
+                    if bx_min == px_max + gap + 1 and py_min == by_max + gap + 1:
+                        x0, y0 = px_max + 1, py_min - 1
+                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": cx - x0 + 1, "dir": 3, "color": link_color})
                         found = True; break
         return geoms
 
@@ -764,7 +777,7 @@ if __name__ == "__main__":
                 "strategy": "flow",
                 "type": "Rectangle",
                 "color": 0,
-                "prefix": [0, 1, 2],
+                "prefix": [0, 1, 2, 3],
                 "pool": [
                     {
                         "geometries": [
@@ -781,7 +794,7 @@ if __name__ == "__main__":
                                         "gap": 1,
                                         "link": {
                                             "types": ["Line", "Diagonal"],
-                                            "length": [1, 3],
+                                            "gap": [1, 3],
                                             "color": 2
                                         },
                                         "size": {"min": [3, 5], "max": [3, 7]},
@@ -842,12 +855,27 @@ if __name__ == "__main__":
                                 "pattern": [1],
                                 "link": {
                                     "types": ["Line", "Diagonal"],
-                                    "length": 3,
-                                    "color": 2
+                                    "gap": 3,
+                                    "color": 2,
+                                    "above": 1
                                 }
                             }
                         ]
-                    }
+                    },
+                    {
+                        "geometries": [
+                            {
+                                "color": 1,
+                                "count": [2, 4],
+                                "gap": 1,
+                                "size": {"min": [4, 7], "max": [5, 9]},
+                                "strategy": "random",
+                                "type": "Rectangle",
+                                "fill_color": -1,
+                                "vertice_color": 2,
+                            }
+                        ]
+                    },
                 ],
             },
         ]
