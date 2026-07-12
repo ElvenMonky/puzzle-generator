@@ -160,15 +160,22 @@ def add_range_constraint(var, spec, solver):
 
 def corner_points(ox, oy, w, h, cuts):
     tl, tr, br, bl = cuts["tl"], cuts["tr"], cuts["br"], cuts["bl"]
+    raw = []
+    raw.append([ox + tl, oy])
+    raw.append([ox + w - 1 - tr, oy])
+    if tr: raw.append([ox + w - 1, oy + tr])
+    raw.append([ox + w - 1, oy + h - 1 - br])
+    if br: raw.append([ox + w - 1 - br, oy + h - 1])
+    raw.append([ox + bl, oy + h - 1])
+    if bl: raw.append([ox, oy + h - 1 - bl])
+    if tl: raw.append([ox, oy + tl])
+
     pts = []
-    pts.append([ox + tl, oy])
-    pts.append([ox + w - 1 - tr, oy])
-    if tr: pts.append([ox + w - 1, oy + tr])
-    pts.append([ox + w - 1, oy + h - 1 - br])
-    if br: pts.append([ox + w - 1 - br, oy + h - 1])
-    pts.append([ox + bl, oy + h - 1])
-    if bl: pts.append([ox, oy + h - 1 - bl])
-    if tl: pts.append([ox, oy + tl])
+    for p in raw:
+        if not pts or p != pts[-1]:
+            pts.append(p)
+    if len(pts) > 1 and pts[-1] == pts[0]:
+        pts.pop()
     return pts
 
 def range_expr(var, spec):
@@ -406,10 +413,10 @@ class GroupPlacement:
                 cuts[corner] = cv
                 solver.add(Implies(active, range_expr(cv, inst_cut.get(corner, 0))))
                 solver.add(Implies(active, cv >= 0))
-            solver.add(Implies(active, cuts["tl"] + cuts["tr"] <= w))
-            solver.add(Implies(active, cuts["bl"] + cuts["br"] <= w))
-            solver.add(Implies(active, cuts["tl"] + cuts["bl"] <= h))
-            solver.add(Implies(active, cuts["tr"] + cuts["br"] <= h))
+            solver.add(Implies(active, cuts["tl"] + cuts["tr"] <= w - 1))
+            solver.add(Implies(active, cuts["bl"] + cuts["br"] <= w - 1))
+            solver.add(Implies(active, cuts["tl"] + cuts["bl"] <= h - 1))
+            solver.add(Implies(active, cuts["tr"] + cuts["br"] <= h - 1))
 
             is_singleton = (idx != -1 and idx < len(pool) and pool[idx].get("singleton", False))
             if is_singleton:
