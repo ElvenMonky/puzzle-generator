@@ -14,9 +14,9 @@ DIR_MATRICES = [
     np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int), # 2: rot180
     np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),  # 3: rot270
     np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),  # 4: flip x
-    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),   # 5: diag flip
+    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int), # 5: antidiag flip
     np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),  # 6: flip y
-    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int), # 7: antidiag flip
+    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),   # 7: diag flip
 ]
 
 ARC_COLORS = [
@@ -193,9 +193,9 @@ def rot_x(dx, dy, d):
            If(d==2, -dx,
            If(d==3,  dy,
            If(d==4, -dx,
-           If(d==5,  dy,
+           If(d==5, -dy,
            If(d==6,  dx,
-                     -dy)))))))
+                     dy)))))))
 
 def rot_y(dx, dy, d):
     return If(d==0, dy,
@@ -203,9 +203,9 @@ def rot_y(dx, dy, d):
            If(d==2, -dy,
            If(d==3, -dx,
            If(d==4,  dy,
-           If(d==5,  dx,
+           If(d==5, -dx,
            If(d==6, -dy,
-                     -dx)))))))
+                     dx)))))))
 
 def z3_min(*vals):
     m = vals[0]
@@ -555,10 +555,14 @@ class GroupPlacement:
         if strategy == "flow":
             row_height = Int(f"rowh_{self.ctx.var}"); self.ctx.var += 1
             self.solver.add(row_height >= 0)
+            heights = []
             for i in range(max_n):
                 inst = insts[i]
                 _, _, yi_min, yi_max = inst.aabb()
-                self.solver.add(Implies(i < cnt, yi_max - yi_min + 1 <= row_height))
+                h_i = yi_max - yi_min + 1
+                heights.append(h_i)
+                self.solver.add(Implies(i < cnt, h_i <= row_height))
+            self.solver.add(Implies(0 < cnt, Or([And(i < cnt, row_height == heights[i]) for i in range(max_n)])))
 
             first = insts[0]
             x0_min, _, y0_min, _ = first.aabb()
@@ -866,9 +870,7 @@ if __name__ == "__main__":
                         "geometries": [
                             {
                                 "color": 9,
-                                "count": 4,
-                                "gap": 3,
-                                "margin": 1,
+                                "count": 9,
                                 "size": {
                                     "width": 5,
                                     "height": 5,
@@ -887,6 +889,11 @@ if __name__ == "__main__":
                                         "count": [1, 5],
                                         "color": 3
                                     }
+                                ],
+                                "pattern": [0,1],
+                                "pool": [
+                                    {"dir": 0, "singleton": True },
+                                    {"dir": 4 }
                                 ]
                             }
                         ]
@@ -910,6 +917,22 @@ if __name__ == "__main__":
                                     "gap": 3,
                                     "color": 2,
                                     "above": 1
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "geometries": [
+                            {
+                                "color": 9,
+                                "count": [15, 40],
+                                "margin": 1,
+                                "gap": 0,
+                                "strategy": "tree",
+                                "type": "Point",
+                                "link": {
+                                    "types": ["Line", "Diagonal"],
+                                    "gap": 0
                                 }
                             }
                         ]
