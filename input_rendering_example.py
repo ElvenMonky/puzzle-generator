@@ -543,6 +543,7 @@ class GroupPlacement:
         col = [Int(f"col_{self.ctx.var + i}") for i in range(max_n)]
         row = [Int(f"row_{self.ctx.var + max_n + i}") for i in range(max_n)]
         level = [Int(f"level_{self.ctx.var + 2 * max_n + i}") for i in range(max_n)]
+        self.col_vars, self.row_vars, self.level_vars = col, row, level
         self.ctx.var += 3 * max_n
         for i in range(max_n):
             self.solver.add(If(i < cnt,
@@ -552,23 +553,6 @@ class GroupPlacement:
         self.solver.add(Or([0 == cnt] + [And(i < cnt, 0 == row[i]) for i in range(max_n)]))
         self.solver.add(Or([0 == cnt] + [And(i < cnt, 0 == col[i]) for i in range(max_n)]))
         self.solver.add(Or(0 == cnt, 0 == level[0]))
-
-        if strategy == "row":
-            for i in range(max_n):
-                inst = insts[i]
-                xi_min, xi_max, yi_min, yi_max = inst.aabb()
-                self.solver.add(Implies(i < cnt, yi_min == self.py))
-                if i == 0:
-                    self.solver.add(Implies(i < cnt, xi_min == self.px))
-                else:
-                    prev = insts[i-1]
-                    _, prev_xmax, _, _ = prev.aabb()
-                    self.solver.add(Implies(i < cnt, xi_min == prev_xmax + gap + 1))
-                self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
-                self.solver.add(Implies(i < cnt, xi_max < self.px + self.pw))
-                self.solver.add(row[i] == 0)
-                self.solver.add(col[i] == i)
-                self.solver.add(level[i] == row[i] + col[i])
 
         if strategy == "flow":
             row_height = Int(f"rowh_{self.ctx.var}"); self.ctx.var += 1
@@ -602,7 +586,7 @@ class GroupPlacement:
                 _, _, _, yi_max = inst.aabb()
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
 
-        if strategy in ("tree", "chain", "star"):
+        if strategy in ("tree", "chain"):
             link_spec = self.spec.get("link")
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
@@ -616,7 +600,6 @@ class GroupPlacement:
                     self.solver.add(If(i < cnt, range_expr(gvar, gap_spec), gvar == 0))
                     if strategy == "tree": parent_indices = range(i)
                     elif strategy == "chain": parent_indices = [i - 1]
-                    elif strategy == "star": parent_indices = [0]
                     kvar = self.link_kind_vars[i]
                     pvar = self.link_parent_vars[i]
                     self.solver.add(If(i < cnt, And(pvar >= 0, pvar < i), pvar == 0))
@@ -629,6 +612,8 @@ class GroupPlacement:
                     self.solver.add(Implies(i < cnt, And(
                         Or([And(kvar == k, pvar == j, col[i] == col[j] + KIND_DCOL[k]) for k in range(8) for j in parent_indices]),
                         Or([And(kvar == k, pvar == j, row[i] == row[j] + KIND_DROW[k]) for k in range(8) for j in parent_indices]))))
+                    self.solver.add(Implies(i < cnt,
+                        Or([And(pvar == j, level[i] == level[j] + 1) for j in parent_indices])))
 
                 for i in range(2, max_n):
                     for j in range(1, i):
@@ -642,6 +627,16 @@ class GroupPlacement:
                                 xj_max + gap < xi_min,
                                 yi_max + gap < yj_min,
                                 yj_max + gap < yi_min)))
+
+        if "rows" in self.spec:
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, range_expr(row[i], self.spec["rows"])))
+        if "cols" in self.spec:
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, range_expr(col[i], self.spec["cols"])))
+        if "levels" in self.spec:
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, range_expr(level[i], self.spec["levels"])))
 
     def extract_geometries(self, model):
         spec = self.spec
@@ -712,7 +707,7 @@ class GroupPlacement:
 
             result.append(item)
 
-        if spec.get("strategy") in ("tree", "chain", "star") and "link" in spec and count_val > 1:
+        if spec.get("strategy") in ("tree", "chain") and "link" in spec and count_val > 1:
             links = self._extract_links(model, count_val)
             if spec["link"].get("above", 0) == 0:
                 result = links + result
@@ -914,7 +909,8 @@ if __name__ == "__main__":
                                 "count": 9,
                                 "margin": 1,
                                 "gap": 1,
-                                "strategy": "star",
+                                "strategy": "tree",
+                                "levels": 1,
                                 "pool": [
                                     { "type": "Point", "color": [3, 8] },
                                     { "type": "Rectangle", "size": { "width": 3, "height": 3 } }
