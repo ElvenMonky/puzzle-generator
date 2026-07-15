@@ -587,46 +587,47 @@ class GroupPlacement:
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
 
         if strategy in ("tree", "chain"):
-            link_spec = self.spec.get("link")
-            if link_spec:
-                allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-                gap_spec = link_spec.get("gap", self.spec.get("gap", 0))
-                self.link_kind_vars = [Int(f"link_kind_{self.ctx.var + i}") for i in range(max_n)]
-                self.link_parent_vars = [Int(f"parent_{self.ctx.var + max_n + i}") for i in range(max_n)]
-                self.ctx.var += 2 * max_n
-                self.solver.add(Implies(0 < cnt, And(self.link_kind_vars[0] == 0, self.link_parent_vars[0] == 0)))
-                for i in range(1, max_n):
-                    gvar = Int(f"link_gap_{self.ctx.var}"); self.ctx.var += 1
-                    self.solver.add(If(i < cnt, range_expr(gvar, gap_spec), gvar == 0))
-                    if strategy == "tree": parent_indices = range(i)
-                    elif strategy == "chain": parent_indices = [i - 1]
-                    kvar = self.link_kind_vars[i]
-                    pvar = self.link_parent_vars[i]
-                    self.solver.add(If(i < cnt, And(pvar >= 0, pvar < i), pvar == 0))
-                    self.solver.add(If(i < cnt, And(kvar >= 0, kvar < 8), kvar == 0))
-                    adj = []
-                    for j in parent_indices:
-                        adj.extend(self._add_link_options(i, j, pvar == j, gvar, allowed_types, insts))
-                    self.solver.add(Implies(i < cnt, Or(adj)))
+            link_spec = self.spec.get("link", {})
+            allowed_types = link_spec.get("type", ["Line", "Diagonal"])
+            if isinstance(allowed_types, str):
+                allowed_types = [allowed_types]
+            gap_spec = link_spec.get("gap", self.spec.get("gap", 0))
+            self.link_kind_vars = [Int(f"link_kind_{self.ctx.var + i}") for i in range(max_n)]
+            self.link_parent_vars = [Int(f"parent_{self.ctx.var + max_n + i}") for i in range(max_n)]
+            self.ctx.var += 2 * max_n
+            self.solver.add(Implies(0 < cnt, And(self.link_kind_vars[0] == 0, self.link_parent_vars[0] == 0)))
+            for i in range(1, max_n):
+                gvar = Int(f"link_gap_{self.ctx.var}"); self.ctx.var += 1
+                self.solver.add(If(i < cnt, range_expr(gvar, gap_spec), gvar == 0))
+                if strategy == "tree": parent_indices = range(i)
+                elif strategy == "chain": parent_indices = [i - 1]
+                kvar = self.link_kind_vars[i]
+                pvar = self.link_parent_vars[i]
+                self.solver.add(If(i < cnt, And(pvar >= 0, pvar < i), pvar == 0))
+                self.solver.add(If(i < cnt, And(kvar >= 0, kvar < 8), kvar == 0))
+                adj = []
+                for j in parent_indices:
+                    adj.extend(self._add_link_options(i, j, pvar == j, gvar, allowed_types, insts))
+                self.solver.add(Implies(i < cnt, Or(adj)))
 
-                    self.solver.add(Implies(i < cnt, And(
-                        Or([And(kvar == k, pvar == j, col[i] == col[j] + KIND_DCOL[k]) for k in range(8) for j in parent_indices]),
-                        Or([And(kvar == k, pvar == j, row[i] == row[j] + KIND_DROW[k]) for k in range(8) for j in parent_indices]))))
-                    self.solver.add(Implies(i < cnt,
-                        Or([And(pvar == j, level[i] == level[j] + 1) for j in parent_indices])))
+                self.solver.add(Implies(i < cnt, And(
+                    Or([And(kvar == k, pvar == j, col[i] == col[j] + KIND_DCOL[k]) for k in range(8) for j in parent_indices]),
+                    Or([And(kvar == k, pvar == j, row[i] == row[j] + KIND_DROW[k]) for k in range(8) for j in parent_indices]))))
+                self.solver.add(Implies(i < cnt,
+                    Or([And(pvar == j, level[i] == level[j] + 1) for j in parent_indices])))
 
-                for i in range(2, max_n):
-                    for j in range(1, i):
-                        pi, pj = self.link_parent_vars[i], self.link_parent_vars[j]
-                        self.solver.add(Implies(And(i < cnt, pi == pj),
-                            self.link_kind_vars[i] < self.link_kind_vars[j]))
-                        xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
-                        xj_min, xj_max, yj_min, yj_max = insts[j].aabb()
-                        self.solver.add(Implies(And(i < cnt),
-                            Or(xi_max + gap < xj_min,
-                                xj_max + gap < xi_min,
-                                yi_max + gap < yj_min,
-                                yj_max + gap < yi_min)))
+            for i in range(2, max_n):
+                for j in range(1, i):
+                    pi, pj = self.link_parent_vars[i], self.link_parent_vars[j]
+                    self.solver.add(Implies(And(i < cnt, pi == pj),
+                        self.link_kind_vars[i] < self.link_kind_vars[j]))
+                    xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
+                    xj_min, xj_max, yj_min, yj_max = insts[j].aabb()
+                    self.solver.add(Implies(And(i < cnt),
+                        Or(xi_max + gap < xj_min,
+                            xj_max + gap < xi_min,
+                            yi_max + gap < yj_min,
+                            yj_max + gap < yi_min)))
 
         def max_in_range(arr, range_spec):
             mvar = Int(f"max_{self.ctx.var}"); self.ctx.var += 1
@@ -711,9 +712,10 @@ class GroupPlacement:
 
             result.append(item)
 
-        if spec.get("strategy") in ("tree", "chain") and "link" in spec and count_val > 1:
+        if spec.get("strategy") in ("tree", "chain") and count_val > 1:
+            link_spec = self.spec.get("link", {})
             links = self._extract_links(model, count_val)
-            if spec["link"].get("above", 0) == 0:
+            if link_spec.get("above", 0) == 0:
                 result = links + result
             else:
                 result.extend(links)
@@ -721,7 +723,7 @@ class GroupPlacement:
 
     def _extract_links(self, model, count_val):
         geoms = []
-        link_spec = self.spec["link"]
+        link_spec = self.spec.get("link", {})
         link_color = roll_range(link_spec.get("color", self.resolved_color))
 
         for i in range(1, count_val):
@@ -857,7 +859,7 @@ if __name__ == "__main__":
                                         "count": [2, 5],
                                         "gap": 1,
                                         "link": {
-                                            "types": ["Line", "Diagonal"],
+                                            "type": ["Line", "Diagonal"],
                                             "gap": [1, 3],
                                             "color": 2
                                         },
@@ -922,7 +924,7 @@ if __name__ == "__main__":
                                 "prefix": [0],
                                 "pattern": [1],
                                 "link": {
-                                    "types": ["Line", "Diagonal"],
+                                    "type": ["Line", "Diagonal"],
                                     "gap": 3,
                                     "color": 2,
                                     "above": 1
@@ -934,15 +936,11 @@ if __name__ == "__main__":
                         "geometries": [
                             {
                                 "color": 9,
-                                "count": [15, 40],
+                                "count": [10, 20],
                                 "margin": 1,
                                 "gap": 0,
                                 "strategy": "tree",
                                 "type": "Point",
-                                "link": {
-                                    "types": ["Line", "Diagonal"],
-                                    "gap": 0
-                                }
                             }
                         ]
                     },
