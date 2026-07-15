@@ -794,7 +794,7 @@ class PuzzleGen:
 
         layer_groups = []
         for layer_spec in gen_spec["layers"]:
-            layer_inherited = layer_spec["color"] if "color" in layer_spec else -1
+            layer_inherited = layer_spec.get("color", -1)
             root_group = GroupPlacement(
                 layer_spec,
                 parent_bounds=(0, 0, canvas_w, canvas_h),
@@ -866,11 +866,14 @@ if __name__ == "__main__":
                                         "size": {"min": [3, 5], "max": [3, 7]},
                                         "strategy": "tree",
                                         "type": "Rectangle",
-                                    },
-                                    {
-                                        "type": "Point",
-                                        "count": 1,
-                                        "color": [3, 9]
+                                        "geometries": [
+                                            {
+                                                "type": "Point",
+                                                "count": [0, 1],
+                                                "color": [3, 9],
+                                                "margin": 1
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -971,17 +974,21 @@ if __name__ == "__main__":
     def fill_container(node):
         point_color = None
         polys = []
-        for g in node.get("geometries", []):
-            if g["type"] == "Point":
-                point_color = g["color"]
-                g["color"] = -1
-            elif g["type"] == "Polygon":
-                polys.append(g)
-            elif "geometries" in g:
-                fill_container(g)
-        if point_color is not None:
-            for p in polys:
-                p["fill_color"] = point_color
+        geoms = node.get("geometries", [])
+        if len(geoms) == 1 and geoms[0]["type"] == "Point":
+            c = geoms[0]["color"]
+            geoms[0]["color"] = -1
+            return c
+        else:
+            for g in geoms:
+                if point_color is None:
+                    point_color = fill_container(g)
+                if g["type"] == "Polygon":
+                    polys.append(g)
+            if point_color is not None:
+                for p in polys:
+                    p["fill_color"] = point_color
+        return None
 
     for layer in exact["layers"]:
         fill_container(layer)
