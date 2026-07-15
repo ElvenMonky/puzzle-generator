@@ -628,15 +628,19 @@ class GroupPlacement:
                                 yi_max + gap < yj_min,
                                 yj_max + gap < yi_min)))
 
+        def max_in_range(arr, range_spec):
+            mvar = Int(f"max_{self.ctx.var}"); self.ctx.var += 1
+            for i in range(max_n):
+                self.solver.add(Implies(i < cnt, arr[i] <= mvar))
+            self.solver.add(Implies(0 < cnt, Or([And(i < cnt, mvar == arr[i]) for i in range(max_n)])))
+            self.solver.add(If(0 < cnt, range_expr(mvar, range_spec), mvar == 0))
+
         if "rows" in self.spec:
-            for i in range(max_n):
-                self.solver.add(Implies(i < cnt, range_expr(row[i], self.spec["rows"])))
+            max_in_range(row, self.spec["rows"])
         if "cols" in self.spec:
-            for i in range(max_n):
-                self.solver.add(Implies(i < cnt, range_expr(col[i], self.spec["cols"])))
+            max_in_range(col, self.spec["cols"])
         if "levels" in self.spec:
-            for i in range(max_n):
-                self.solver.add(Implies(i < cnt, range_expr(level[i], self.spec["levels"])))
+            max_in_range(level, self.spec["levels"])
 
     def extract_geometries(self, model):
         spec = self.spec
