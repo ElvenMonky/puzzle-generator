@@ -110,7 +110,7 @@ class Canvas:
 
     @staticmethod
     def parse_canvas(spec):
-        layers = [Canvas.parse_geometry(s) for s in spec.get("layers", [])]
+        layers = [Canvas.parse_geometry(s) for s in spec.get("geometries", [])]
         return Canvas(width=spec["width"], height=spec["height"], background=spec.get("background", 0), layers=layers)
 
     def __init__(self, width, height, background=0, layers=None):
@@ -288,11 +288,10 @@ class GroupPlacement:
         self.link_parent_vars = []
         self.link_kind_vars = []
 
-        self.resolved_color = spec["color"] if "color" in spec else inherited_color
+        self.resolved_color = spec.get("color", inherited_color)
 
         base_type = spec.get("type", "Geometry")
         base_size = spec.get("size", {})
-        base_color = spec.get("color")
         base_fill_color = spec.get("fill_color")
         base_vertice_color = spec.get("vertice_color")
         base_cut = spec.get("cut", {})
@@ -344,7 +343,7 @@ class GroupPlacement:
                         ov_type = p_item.get("type", base_type)
                         if isinstance(ov_type, list): ov_type = random.choice(ov_type)
                         inst_size = p_item.get("size", base_size)
-                        inst_color = p_item.get("color", base_color)
+                        inst_color = p_item.get("color", self.resolved_color)
                         inst_fill_color = p_item.get("fill_color", base_fill_color)
                         inst_vertice_color = p_item.get("vertice_color", base_vertice_color)
                         inst_cut = p_item.get("cut", base_cut)
@@ -358,7 +357,7 @@ class GroupPlacement:
                 if idx < 0:
                     inst_type = base_type if not isinstance(base_type, list) else random.choice(base_type)
                     inst_size = base_size
-                    inst_color = base_color
+                    inst_color = self.resolved_color
                     inst_fill_color = base_fill_color
                     inst_vertice_color = base_vertice_color
                     inst_cut = base_cut
@@ -370,7 +369,7 @@ class GroupPlacement:
                 inst_type = ov.get("type", base_type)
                 if isinstance(inst_type, list): inst_type = random.choice(inst_type)
                 inst_size = ov.get("size", base_size)
-                inst_color = ov.get("color", base_color)
+                inst_color = ov.get("color", self.resolved_color)
                 inst_fill_color = ov.get("fill_color", base_fill_color)
                 inst_vertice_color = ov.get("vertice_color", base_vertice_color)
                 inst_cut = ov.get("cut", base_cut)
@@ -458,7 +457,7 @@ class GroupPlacement:
                     child = GroupPlacement(child_spec,
                                            parent_bounds=(ox, oy, w, h),
                                            solver=solver, ctx=ctx,
-                                           inherited_color=inst_color if inst_color is not None else self.resolved_color)
+                                           inherited_color=inst_color)
                     child_list.append(child)
             self.child_groups.append(child_list)
 
@@ -793,15 +792,14 @@ class PuzzleGen:
         solver.add(canvas_h >= min_h, canvas_h <= max_h)
 
         layer_groups = []
-        for layer_spec in gen_spec["layers"]:
-            layer_inherited = layer_spec.get("color", -1)
+        for layer_spec in gen_spec["geometries"]:
             root_group = GroupPlacement(
                 layer_spec,
                 parent_bounds=(0, 0, canvas_w, canvas_h),
                 solver=solver, ctx=ctx,
-                inherited_color=layer_inherited
+                inherited_color=-1
             )
-            layer_groups.append((layer_spec, root_group))
+            layer_groups.append(root_group)
 
         if solver.check() == unsat:
             raise Exception("Constraints unsatisfiable – adjust spec ranges")
@@ -811,19 +809,14 @@ class PuzzleGen:
         canvas_h_val = model[canvas_h].as_long()
 
         layers_geoms = []
-        for layer_spec, root_group in layer_groups:
-            layers_geoms.append({
-                "type": "Geometry",
-                "x": 0, "y": 0, "dir": 0,
-                "color": roll_range(layer_spec["color"]) if "color" in layer_spec else -1,
-                "geometries": root_group.extract_geometries(model)
-            })
+        for root_group in layer_groups:
+            layers_geoms.extend(root_group.extract_geometries(model))
 
         return {
             "width": canvas_w_val,
             "height": canvas_h_val,
             "background": back_spec,
-            "layers": layers_geoms
+            "geometries": layers_geoms
         }
 
 # ==========================================
@@ -831,11 +824,10 @@ class PuzzleGen:
 # ==========================================
 if __name__ == "__main__":
     generative_spec = {
-        "type": "Canvas",
         "width": 31,
         "height": 31,
         "background": 5,
-        "layers": [
+        "geometries": [
             {
                 "count": 4,
                 "gap": 1,
@@ -990,7 +982,7 @@ if __name__ == "__main__":
                     p["fill_color"] = point_color
         return None
 
-    for layer in exact["layers"]:
+    for layer in exact["geometries"]:
         fill_container(layer)
 
     grid_out = Canvas.parse_canvas(exact).render()
