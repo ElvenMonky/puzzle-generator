@@ -158,6 +158,9 @@ def add_range_constraint(var, spec, solver):
     if step > 1:
         solver.add((var - lo) % step == 0)
 
+KIND_DCOL = {0: 1, 1: 1, 2: 0, 3: -1, 4: -1, 5: -1, 6: 0, 7: 1}
+KIND_DROW = {0: 0, 1: 1, 2: 1, 3: 1, 4: 0, 5: -1, 6: -1, 7: -1}
+
 def corner_points(ox, oy, w, h, cuts):
     tl, tr, br, bl = cuts["tl"], cuts["tr"], cuts["br"], cuts["bl"]
     raw = []
@@ -282,8 +285,8 @@ class GroupPlacement:
 
         self.instances = []
         self.child_groups = []
-        self.link_vars = []
-        self.link_parent_vars = {}
+        self.link_parent_vars = []
+        self.link_kind_vars = []
 
         self.resolved_color = spec["color"] if "color" in spec else inherited_color
 
@@ -498,19 +501,20 @@ class GroupPlacement:
     def _add_link_options(self, i, j, cond, gvar, allowed_types, insts):
         adj = []
         a = insts[j]; b = insts[i]
+        kind_var = self.link_kind_vars[i]
         a_min_x, a_max_x, a_min_y, a_max_y = a.aabb()
         b_min_x, b_max_x, b_min_y, b_max_y = b.aabb()
 
         if "Line" in allowed_types:
-            adj.append(And(cond, b_min_x == a_max_x + gvar + 1, a_min_y <= b.y, b.y <= a_max_y))
-            adj.append(And(cond, a_min_x == b_max_x + gvar + 1, a_min_y <= b.y, b.y <= a_max_y))
-            adj.append(And(cond, b_min_y == a_max_y + gvar + 1, a_min_x <= b.x, b.x <= a_max_x))
-            adj.append(And(cond, a_min_y == b_max_y + gvar + 1, a_min_x <= b.x, b.x <= a_max_x))
+            adj.append(And(cond, kind_var == 0, b_min_x == a_max_x + gvar + 1, a_min_y <= b.y, b.y <= a_max_y))
+            adj.append(And(cond, kind_var == 2, b_min_y == a_max_y + gvar + 1, a_min_x <= b.x, b.x <= a_max_x))
+            adj.append(And(cond, kind_var == 4, a_min_x == b_max_x + gvar + 1, a_min_y <= b.y, b.y <= a_max_y))
+            adj.append(And(cond, kind_var == 6, a_min_y == b_max_y + gvar + 1, a_min_x <= b.x, b.x <= a_max_x))
         if "Diagonal" in allowed_types:
-            adj.append(And(cond, b_min_x == a_max_x + gvar + 1, b_min_y == a_max_y + gvar + 1, b.x - a_max_x == b.y - a_max_y))
-            adj.append(And(cond, a_min_x == b_max_x + gvar + 1, b_min_y == a_max_y + gvar + 1, a_min_x - b.x == b.y - a_max_y))
-            adj.append(And(cond, a_min_x == b_max_x + gvar + 1, a_min_y == b_max_y + gvar + 1, a_min_x - b.x == a_min_y - b.y))
-            adj.append(And(cond, b_min_x == a_max_x + gvar + 1, a_min_y == b_max_y + gvar + 1, b.x - a_max_x == a_min_y - b.y))
+            adj.append(And(cond, kind_var == 1, b_min_x == a_max_x + gvar + 1, b_min_y == a_max_y + gvar + 1, b.x - a_max_x == b.y - a_max_y))
+            adj.append(And(cond, kind_var == 3, a_min_x == b_max_x + gvar + 1, b_min_y == a_max_y + gvar + 1, a_min_x - b.x == b.y - a_max_y))
+            adj.append(And(cond, kind_var == 5, a_min_x == b_max_x + gvar + 1, a_min_y == b_max_y + gvar + 1, a_min_x - b.x == a_min_y - b.y))
+            adj.append(And(cond, kind_var == 7, b_min_x == a_max_x + gvar + 1, a_min_y == b_max_y + gvar + 1, b.x - a_max_x == a_min_y - b.y))
         return adj
 
     def _add_strategy_constraints(self):
@@ -523,7 +527,7 @@ class GroupPlacement:
         cnt = self.count_var
         insts = self.instances
 
-        if strategy in ("random", "tree", "chain", "star"):
+        if strategy == "random":
             for i in range(max_n):
                 for j in range(i + 1, max_n):
                     xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
@@ -534,9 +538,20 @@ class GroupPlacement:
                                    xj_max + gap < xi_min,
                                    yi_max + gap < yj_min,
                                    yj_max + gap < yi_min)))
-
-        if strategy == "random":
-            pass
+            return
+        
+        col = [Int(f"col_{self.ctx.var + i}") for i in range(max_n)]
+        row = [Int(f"row_{self.ctx.var + max_n + i}") for i in range(max_n)]
+        level = [Int(f"level_{self.ctx.var + 2 * max_n + i}") for i in range(max_n)]
+        self.ctx.var += 3 * max_n
+        for i in range(max_n):
+            self.solver.add(If(i < cnt,
+                And(row[i] >= 0, col[i] >= 0, level[i] >= 0),
+                And(row[i] == 0, col[i] == 0, level[i] == 0)))
+            self.solver.add(Implies(i < cnt, And([Or(row[i] != row[j], col[i] != col[j]) for j in range(i)])))
+        self.solver.add(Or([0 == cnt] + [And(i < cnt, 0 == row[i]) for i in range(max_n)]))
+        self.solver.add(Or([0 == cnt] + [And(i < cnt, 0 == col[i]) for i in range(max_n)]))
+        self.solver.add(Or(0 == cnt, 0 == level[0]))
 
         if strategy == "row":
             for i in range(max_n):
@@ -551,6 +566,9 @@ class GroupPlacement:
                     self.solver.add(Implies(i < cnt, xi_min == prev_xmax + gap + 1))
                 self.solver.add(Implies(i < cnt, yi_max < self.py + self.ph))
                 self.solver.add(Implies(i < cnt, xi_max < self.px + self.pw))
+                self.solver.add(row[i] == 0)
+                self.solver.add(col[i] == i)
+                self.solver.add(level[i] == row[i] + col[i])
 
         if strategy == "flow":
             row_height = Int(f"rowh_{self.ctx.var}"); self.ctx.var += 1
@@ -562,10 +580,9 @@ class GroupPlacement:
                 h_i = yi_max - yi_min + 1
                 heights.append(h_i)
                 self.solver.add(Implies(i < cnt, h_i <= row_height))
-            self.solver.add(Implies(0 < cnt, Or([And(i < cnt, row_height == heights[i]) for i in range(max_n)])))
+            self.solver.add(Or([0 == cnt] + [And(i < cnt, row_height == heights[i]) for i in range(max_n)]))
 
-            first = insts[0]
-            x0_min, _, y0_min, _ = first.aabb()
+            x0_min, _, y0_min, _ = insts[0].aabb()
             self.solver.add(Implies(0 < cnt, And(x0_min == self.px, y0_min == self.py)))
 
             for i in range(1, max_n):
@@ -574,12 +591,11 @@ class GroupPlacement:
                 curr_xmin, curr_xmax, curr_ymin, _ = curr.aabb()
                 curr_width = curr_xmax - curr_xmin + 1
                 fits = (prev_xmax + gap + 1 + curr_width <= self.px + self.pw)
-                self.solver.add(
-                    Implies(And((i-1) < cnt, i < cnt),
-                            curr_xmin == If(fits, prev_xmax + gap + 1, self.px)))
-                self.solver.add(
-                    Implies(And((i-1) < cnt, i < cnt),
-                            curr_ymin == If(fits, prev_ymin, prev_ymin + row_height + gap)))
+                self.solver.add(Implies(i < cnt, curr_xmin == If(fits, prev_xmax + gap + 1, self.px)))
+                self.solver.add(Implies(i < cnt, curr_ymin == If(fits, prev_ymin, prev_ymin + row_height + gap)))
+                self.solver.add(Implies(i < cnt, row[i] == If(fits, row[i-1], row[i-1] + 1)))
+                self.solver.add(Implies(i < cnt, col[i] == If(fits, col[i-1] + 1, 0)))
+                self.solver.add(level[i] == row[i] + col[i])
 
             for i in range(max_n):
                 inst = insts[i]
@@ -591,25 +607,41 @@ class GroupPlacement:
             if link_spec:
                 allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
                 gap_spec = link_spec.get("gap", self.spec.get("gap", 0))
+                self.link_kind_vars = [Int(f"link_kind_{self.ctx.var + i}") for i in range(max_n)]
+                self.link_parent_vars = [Int(f"parent_{self.ctx.var + max_n + i}") for i in range(max_n)]
+                self.ctx.var += 2 * max_n
+                self.solver.add(Implies(0 < cnt, And(self.link_kind_vars[0] == 0, self.link_parent_vars[0] == 0)))
                 for i in range(1, max_n):
                     gvar = Int(f"link_gap_{self.ctx.var}"); self.ctx.var += 1
-                    self.link_vars.append(gvar)
-                    self.solver.add(Implies(i < cnt, range_expr(gvar, gap_spec)))
+                    self.solver.add(If(i < cnt, range_expr(gvar, gap_spec), gvar == 0))
                     if strategy == "tree": parent_indices = range(i)
                     elif strategy == "chain": parent_indices = [i - 1]
                     elif strategy == "star": parent_indices = [0]
-                    if len(parent_indices) > 1:
-                        pvar = Int(f"parent_{self.ctx.var}"); self.ctx.var += 1
-                        self.link_parent_vars[i] = pvar
-                        self.solver.add(Implies(i < cnt, pvar < i))
-                    else:
-                        pvar = None
-
+                    kvar = self.link_kind_vars[i]
+                    pvar = self.link_parent_vars[i]
+                    self.solver.add(If(i < cnt, And(pvar >= 0, pvar < i), pvar == 0))
+                    self.solver.add(If(i < cnt, And(kvar >= 0, kvar < 8), kvar == 0))
                     adj = []
                     for j in parent_indices:
-                        cond = And(j < cnt, i < cnt) if pvar is None else And(j < cnt, i < cnt, pvar == j)
-                        adj.extend(self._add_link_options(i, j, cond, gvar, allowed_types, insts))
+                        adj.extend(self._add_link_options(i, j, pvar == j, gvar, allowed_types, insts))
                     self.solver.add(Implies(i < cnt, Or(adj)))
+
+                    self.solver.add(Implies(i < cnt, And(
+                        Or([And(kvar == k, pvar == j, col[i] == col[j] + KIND_DCOL[k]) for k in range(8) for j in parent_indices]),
+                        Or([And(kvar == k, pvar == j, row[i] == row[j] + KIND_DROW[k]) for k in range(8) for j in parent_indices]))))
+
+                for i in range(2, max_n):
+                    for j in range(1, i):
+                        pi, pj = self.link_parent_vars[i], self.link_parent_vars[j]
+                        self.solver.add(Implies(And(i < cnt, pi == pj),
+                            self.link_kind_vars[i] < self.link_kind_vars[j]))
+                        xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
+                        xj_min, xj_max, yj_min, yj_max = insts[j].aabb()
+                        self.solver.add(Implies(And(i < cnt),
+                            Or(xi_max + gap < xj_min,
+                                xj_max + gap < xi_min,
+                                yi_max + gap < yj_min,
+                                yj_max + gap < yi_min)))
 
     def extract_geometries(self, model):
         spec = self.spec
@@ -692,65 +724,42 @@ class GroupPlacement:
         geoms = []
         link_spec = self.spec["link"]
         link_color = roll_range(link_spec.get("color", self.resolved_color))
-        allowed_types = link_spec.get("types", [link_spec.get("type", "Line")])
-        strategy = self.spec.get("strategy")
 
         for i in range(1, count_val):
             child = self.instances[i]
             cx, cy = model[child.x].as_long(), model[child.y].as_long()
-            gap = model[self.link_vars[i - 1]].as_long()
-            found = False
 
-            if strategy == "tree":
-                parent_indices = [model[self.link_parent_vars[i]].as_long()] if i in self.link_parent_vars else [0]
-            elif strategy == "chain":
-                parent_indices = [i - 1]
-            elif strategy == "star":
-                parent_indices = [0]
-            else:
-                continue
+            j = model[self.link_parent_vars[i]].as_long()
+            k = model[self.link_kind_vars[i]].as_long()
 
-            for j in parent_indices:
-                if found: break
-                parent = self.instances[j]
-                px_min, px_max, py_min, py_max = parent.concrete_aabb(model)
-                bx_min, bx_max, by_min, by_max = child.concrete_aabb(model)
+            parent = self.instances[j]
+            px_min, px_max, py_min, py_max = parent.concrete_aabb(model)
 
-                if "Line" in allowed_types:
-                    if bx_min == px_max + gap + 1 and py_min <= cy <= py_max:
-                        x0 = px_max + 1
-                        geoms.append({"type": "Line", "x": x0, "y": cy, "length": cx - x0 + 1, "dir": 0, "color": link_color})
-                        found = True; break
-                    if px_min == bx_max + gap + 1 and py_min <= cy <= py_max:
-                        x0 = px_min - 1
-                        geoms.append({"type": "Line", "x": x0, "y": cy, "length": x0 - cx + 1, "dir": 2, "color": link_color})
-                        found = True; break
-                    if by_min == py_max + gap + 1 and px_min <= cx <= px_max:
-                        y0 = py_max + 1
-                        geoms.append({"type": "Line", "x": cx, "y": y0, "length": cy - y0 + 1, "dir": 1, "color": link_color})
-                        found = True; break
-                    if py_min == by_max + gap + 1 and px_min <= cx <= px_max:
-                        y0 = py_min - 1
-                        geoms.append({"type": "Line", "x": cx, "y": y0, "length": y0 - cy + 1, "dir": 3, "color": link_color})
-                        found = True; break
+            if k == 0:
+                x0 = px_max + 1
+                geoms.append({"type": "Line", "x": x0, "y": cy, "length": cx - x0 + 1, "dir": 0, "color": link_color})
+            if k == 2:
+                y0 = py_max + 1
+                geoms.append({"type": "Line", "x": cx, "y": y0, "length": cy - y0 + 1, "dir": 1, "color": link_color})
+            if k == 4:
+                x0 = px_min - 1
+                geoms.append({"type": "Line", "x": x0, "y": cy, "length": x0 - cx + 1, "dir": 2, "color": link_color})
+            if k == 6:
+                y0 = py_min - 1
+                geoms.append({"type": "Line", "x": cx, "y": y0, "length": y0 - cy + 1, "dir": 3, "color": link_color})
+            if k == 1:
+                x0, y0 = px_max + 1, py_max + 1
+                geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": cx - x0 + 1, "dir": 0, "color": link_color})
+            if k == 3:
+                x0, y0 = px_min - 1, py_max + 1
+                geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": x0 - cx + 1, "dir": 1, "color": link_color})
+            if k == 5:
+                x0, y0 = px_min - 1, py_min - 1
+                geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": x0 - cx + 1, "dir": 2, "color": link_color})
+            if k == 7:
+                x0, y0 = px_max + 1, py_min - 1
+                geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": cx - x0 + 1, "dir": 3, "color": link_color})
 
-                if "Diagonal" in allowed_types and not found:
-                    if bx_min == px_max + gap + 1 and by_min == py_max + gap + 1:
-                        x0, y0 = px_max + 1, py_max + 1
-                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": cx - x0 + 1, "dir": 0, "color": link_color})
-                        found = True; break
-                    if px_min == bx_max + gap + 1 and by_min == py_max + gap + 1:
-                        x0, y0 = px_min - 1, py_max + 1
-                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": x0 - cx + 1, "dir": 1, "color": link_color})
-                        found = True; break
-                    if px_min == bx_max + gap + 1 and py_min == by_max + gap + 1:
-                        x0, y0 = px_min - 1, py_min - 1
-                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": x0 - cx + 1, "dir": 2, "color": link_color})
-                        found = True; break
-                    if bx_min == px_max + gap + 1 and py_min == by_max + gap + 1:
-                        x0, y0 = px_max + 1, py_min - 1
-                        geoms.append({"type": "Diagonal", "x": x0, "y": y0, "length": cx - x0 + 1, "dir": 3, "color": link_color})
-                        found = True; break
         return geoms
 
 # ==========================================
