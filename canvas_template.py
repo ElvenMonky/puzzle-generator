@@ -555,14 +555,15 @@ class GroupTemplate:
                 self.solver.add(Implies(i < cnt,
                     Or([And(pvar == j, level[i] == level[j] + 1) for j in parent_indices])))
 
-            for i in range(2, max_n):
-                for j in range(1, i):
-                    pi, pj = self.link_parent_vars[i], self.link_parent_vars[j]
-                    self.solver.add(Implies(And(i < cnt, pi == pj),
-                        self.link_kind_vars[i] < self.link_kind_vars[j]))
+            for i in range(1, max_n):
+                for j in range(i):
+                    if j > 0:
+                        pi, pj = self.link_parent_vars[i], self.link_parent_vars[j]
+                        self.solver.add(Implies(And(i < cnt, pi == pj),
+                            self.link_kind_vars[i] < self.link_kind_vars[j]))
                     xi_min, xi_max, yi_min, yi_max = insts[i].aabb()
                     xj_min, xj_max, yj_min, yj_max = insts[j].aabb()
-                    self.solver.add(Implies(And(i < cnt),
+                    self.solver.add(Implies(i < cnt,
                         Or(xi_max + gap < xj_min,
                             xj_max + gap < xi_min,
                             yi_max + gap < yj_min,
