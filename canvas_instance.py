@@ -1,10 +1,39 @@
 from dataclasses import dataclass, field
-from typing import NotRequired, Optional, TypedDict
+from typing import Optional, TypedDict
 
 import cattrs
 import numpy as np
 
-def _point_in_polygon(px: int, py: int, vertices: list[tuple[int, int]]) -> bool:
+VerticesSpec = list[tuple[int, int]]
+
+class GeometrySpec(TypedDict):
+    x: int
+    y: int
+    dir: int
+    vertices: VerticesSpec
+    color: Optional[int]
+    edge_color: Optional[int]
+    vertice_color: Optional[int]
+    geometries: list["GeometrySpec"]
+    
+
+class CanvasSpec(TypedDict):
+    width: int
+    height: int
+    geometries: list[GeometrySpec]
+
+DIR_MATRICES = [
+    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
+    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
+    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
+    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
+    np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
+    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
+    np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
+    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
+]
+
+def _point_in_polygon(px: int, py: int, vertices: VerticesSpec) -> bool:
     inside = False
     for i in range(len(vertices)):
         x0, y0 = vertices[i]
@@ -15,24 +44,15 @@ def _point_in_polygon(px: int, py: int, vertices: list[tuple[int, int]]) -> bool
                 inside = not inside
     return inside
 
-DIR_MATRICES = [
-    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
-]
-
 @dataclass
 class Geometry:
-    type = "Geometry"
     x: int = 0
     y: int = 0
     dir: int = 0
     color: Optional[int] = None
+    edge_color: Optional[int] = None
+    vertice_color: Optional[int] = None
+    vertices: VerticesSpec = field(default_factory=list)
     geometries: list["Geometry"] = field(default_factory=list)
     parent: Optional["Geometry"] = field(default=None, init=False, repr=False, compare=False)
 
@@ -49,74 +69,39 @@ class Geometry:
         return self.parent.world_matrix @ self.local_matrix if self.parent else self.local_matrix
 
     def get_local_points(self) -> list[tuple[int, int, Optional[int]]]:
-        return []
-
-@dataclass
-class Point(Geometry):
-    type = "Point"
-
-    def get_local_points(self) -> list[tuple[int, int, Optional[int]]]:
-        return [(0, 0, self.color)]
-
-@dataclass
-class Line(Geometry):
-    type = "Line"
-    length: int = 1
-    dx: int = 1
-    dy: int = 0
-    ox: int = 0
-    oy: int = 0
-
-    def get_local_points(self) -> list[tuple[int, int, Optional[int]]]:
-        return [(self.dx * i + self.ox, self.dy * i + self.oy, self.color) for i in range(self.length)]
-
-@dataclass
-class Diagonal(Line):
-    type = "Diagonal"
-    dx: int = 1
-    dy: int = 1
-
-@dataclass
-class Polygon(Geometry):
-    type = "Polygon"
-    vertices: list[tuple[int, int]] = field(default_factory=list)
-    fill_color: Optional[int] = None
-    vertice_color: Optional[int] = None
-
-    def get_local_points(self) -> list[tuple[int, int, Optional[int]]]:
         if not self.vertices:
             return []
         points: dict[int, dict[int, int]] = {}
         xs, ys = [v[0] for v in self.vertices], [v[1] for v in self.vertices]
         min_x, max_x, min_y, max_y = int(min(xs)), int(max(xs)), int(min(ys)), int(max(ys))
-        int_color = self.fill_color if self.fill_color is not None else self.color
+        color = self.color
         for py in range(min_y, max_y + 1):
             points[py] = {}
             for px in range(min_x, max_x + 1):
-                points[py][px] = int_color if _point_in_polygon(px, py, self.vertices) else -1
+                if _point_in_polygon(px, py, self.vertices):
+                    points[py][px] = color
+        if self.edge_color is not None:
+            color = self.edge_color
         for i in range(len(self.vertices)):
             x0, y0 = self.vertices[i]
             x1, y1 = self.vertices[i - 1]
             if x0 == x1:
                 for y in range(min(y0, y1), max(y0, y1) + 1):
-                    points[y][x0] = self.color
+                    points[y][x0] = color
             elif y0 == y1:
                 for x in range(min(x0, x1), max(x0, x1) + 1):
-                    points[y0][x] = self.color
+                    points[y0][x] = color
             elif abs(x1 - x0) == abs(y1 - y0):
                 steps = abs(x1 - x0)
                 sx = 1 if x1 > x0 else -1
                 sy = 1 if y1 > y0 else -1
                 for s in range(steps + 1):
-                    points[y0 + s * sy][x0 + s * sx] = self.color
+                    points[y0 + s * sy][x0 + s * sx] = color
         if self.vertice_color is not None:
-            for vx, vy in self.vertices:
-                points[vy][vx] = self.vertice_color
+            color = self.vertice_color
+        for vx, vy in self.vertices:
+            points[vy][vx] = color
         return [(x, y, points[y][x]) for y in points for x in points[y]]
-
-GEOMETRY_TYPES: dict[str, type[Geometry]] = {
-    cls.type: cls for cls in (Geometry, Point, Line, Diagonal, Polygon)
-}
 
 @dataclass
 class Canvas:
@@ -144,37 +129,16 @@ class Canvas:
                     grid[wy, wx] = c
         return grid
 
-class GeometrySpec(TypedDict):
-    type: str
-    x: NotRequired[int]
-    y: NotRequired[int]
-    dir: NotRequired[int]
-    color: NotRequired[Optional[int]]
-    geometries: NotRequired[list["GeometrySpec"]]
-    length: NotRequired[int]        # Line / Diagonal
-    ox: NotRequired[int]            # Line / Diagonal
-    oy: NotRequired[int]            # Line / Diagonal
-    vertices: NotRequired[list[tuple[int, int]]]  # Polygon
-    fill_color: NotRequired[Optional[int]]         # Polygon
-    vertice_color: NotRequired[Optional[int]]      # Polygon
-
-class CanvasSpec(TypedDict):
-    width: int
-    height: int
-    background: NotRequired[int]
-    geometries: NotRequired[list[GeometrySpec]]
-
 converter = cattrs.Converter()
 
 def _structure_geometry(data: GeometrySpec, _) -> Geometry:
-    cls = GEOMETRY_TYPES.get(data.get("type", "Geometry"), Geometry)
-    fields = {f for f in cls.__dataclass_fields__ if f != "parent"}
+    fields = {f for f in Geometry.__dataclass_fields__ if f != "parent"}
     kwargs = {k: v for k, v in data.items() if k in fields}
     if "geometries" in kwargs:
         kwargs["geometries"] = [converter.structure(g, Geometry) for g in kwargs["geometries"]]
     if "vertices" in kwargs:
         kwargs["vertices"] = [tuple(v) for v in kwargs["vertices"]]
-    return cls(**kwargs)
+    return Geometry(**kwargs)
 
 def _structure_canvas(data: CanvasSpec, _) -> Canvas:
     return Canvas(
