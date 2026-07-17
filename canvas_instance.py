@@ -4,13 +4,14 @@ from typing import Optional, TypedDict
 import cattrs
 import numpy as np
 
-VerticesSpec = list[tuple[int, int]]
+PointsSpec = list[tuple[int, int]]
+ColoredPointsSpec = list[tuple[int, int, Optional[int]]]
 
 class GeometrySpec(TypedDict):
     x: int
     y: int
     dir: int
-    vertices: VerticesSpec
+    vertices: PointsSpec
     color: Optional[int]
     edge_color: Optional[int]
     vertice_color: Optional[int]
@@ -22,18 +23,22 @@ class CanvasSpec(TypedDict):
     height: int
     geometries: list[GeometrySpec]
 
-DIR_MATRICES = [
-    np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=int),
-    np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=int),
-    np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 1]], dtype=int),
-]
+def _rotate45(x: int, y: int) -> tuple[int, int]:
+    flip = y < 0 or (y == 0 and x < 0)
+    if flip:
+        x, y = -x, -y
+    m = ((1, 0), (1, 1))
+    if y <= x:
+        m = ((1, -1), (1, 0))
+    elif x >= 0:
+        m = ((1, -1), (0, 1))
+    elif y >= -x:
+        m = ((0, -1), (1, 1))
+    rx = m[0][0] * x + m[0][1] * y
+    ry = m[1][0] * x + m[1][1] * y
+    return (-rx, -ry) if flip else (rx, ry)
 
-def _point_in_polygon(px: int, py: int, vertices: VerticesSpec) -> bool:
+def _point_in_polygon(px: int, py: int, vertices: PointsSpec) -> bool:
     inside = False
     for i in range(len(vertices)):
         x0, y0 = vertices[i]
@@ -52,29 +57,23 @@ class Geometry:
     color: Optional[int] = None
     edge_color: Optional[int] = None
     vertice_color: Optional[int] = None
-    vertices: VerticesSpec = field(default_factory=list)
+    vertices: PointsSpec = field(default_factory=list)
     geometries: list["Geometry"] = field(default_factory=list)
-    parent: Optional["Geometry"] = field(default=None, init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        for g in self.geometries:
-            g.parent = self
+    def transform(self, x: int, y: int, c: Optional[int]) -> tuple[int, int]:
+        d = self.dir
+        [(x, y), (-y, x), (-x, -y), (y, -x), (x, -y), (y, x), (-x, y), (-y, -x)][d // 2]
+        if d % 2 == 1:
+            x, y = _rotate45(x, y)
+        return x + self.x, y + self.y
 
-    @property
-    def local_matrix(self) -> np.ndarray:
-        return np.array([[1, 0, self.x], [0, 1, self.y], [0, 0, 1]], dtype=int) @ DIR_MATRICES[self.dir]
-
-    @property
-    def world_matrix(self) -> np.ndarray:
-        return self.parent.world_matrix @ self.local_matrix if self.parent else self.local_matrix
-
-    def get_local_points(self) -> list[tuple[int, int, Optional[int]]]:
+    def render_own_geometry(self, inherited_color: Optional[int] = None) -> ColoredPointsSpec:
         if not self.vertices:
             return []
         points: dict[int, dict[int, int]] = {}
         xs, ys = [v[0] for v in self.vertices], [v[1] for v in self.vertices]
-        min_x, max_x, min_y, max_y = int(min(xs)), int(max(xs)), int(min(ys)), int(max(ys))
-        color = self.color
+        min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
+        color = self.color if self.color is not None else inherited_color
         for py in range(min_y, max_y + 1):
             points[py] = {}
             for px in range(min_x, max_x + 1):
@@ -103,6 +102,15 @@ class Geometry:
             points[vy][vx] = color
         return [(x, y, points[y][x]) for y in points for x in points[y]]
 
+    def render(self, inherited_color: Optional[int] = None) -> ColoredPointsSpec:
+        color = self.color if self.color is not None else inherited_color
+
+        points = self.render_own_geometry(inherited_color)
+        for child in self.geometries:
+            points.extend(child.render(color))
+        
+        return [self.transform(*p) for p in points]
+
 @dataclass
 class Canvas:
     width: int
@@ -113,18 +121,8 @@ class Canvas:
     def render(self) -> np.ndarray:
         grid = np.full((self.height, self.width), self.background, dtype=int)
 
-        def collect(node: Geometry, inherited_color: Optional[int]):
-            cur = node.color if node.color is not None else inherited_color
-            pts = [
-                ((node.world_matrix @ [px, py, 1])[:2].tolist() + [c if c is not None else cur])
-                for px, py, c in node.get_local_points()
-            ]
-            for child in node.geometries:
-                pts.extend(collect(child, cur))
-            return pts
-
         for layer in self.layers:
-            for wx, wy, c in collect(layer, layer.color):
+            for wx, wy, c in layer.render():
                 if 0 <= wx < self.width and 0 <= wy < self.height and c not in (None, -1):
                     grid[wy, wx] = c
         return grid
@@ -132,7 +130,7 @@ class Canvas:
 converter = cattrs.Converter()
 
 def _structure_geometry(data: GeometrySpec, _) -> Geometry:
-    fields = {f for f in Geometry.__dataclass_fields__ if f != "parent"}
+    fields = set(Geometry.__dataclass_fields__)
     kwargs = {k: v for k, v in data.items() if k in fields}
     if "geometries" in kwargs:
         kwargs["geometries"] = [converter.structure(g, Geometry) for g in kwargs["geometries"]]
