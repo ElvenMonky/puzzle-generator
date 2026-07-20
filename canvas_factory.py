@@ -114,8 +114,6 @@ class GeometryGroup:
     def pick_slot(self) -> GeometryReference:
         own_weight = self.weight if self.template is not None else 0
         total = own_weight + sum((r.weight or 0) for r in self.pool)
-        if total <= 0:
-            raise ValueError("group has no viable template: no own template and no weighted pool entries")
         r = random.uniform(0, total)
         for ref in self.pool:
             w = ref.weight or 0
@@ -205,6 +203,10 @@ class GeometryTemplate:
 class CanvasFactory:
     root: str
     templates: dict[str, GeometryTemplate]
+
+    def generate_model(self, template: str, width: int, height: int,
+                        rng: Optional[random.Random] = None) -> "ModelRef":
+        return self.templates[template].generate_model(self.templates, width, height, rng)
 
 
 factory_converter = cattrs.Converter()
