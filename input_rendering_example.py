@@ -4,7 +4,7 @@ from matplotlib.colors import ListedColormap
 from typing import Optional
 
 from canvas import build_canvas, Geometry
-from canvas_factory import generate_canvas_spec, CanvasFactory
+from canvas_factory import build_factory, CanvasFactorySpec
 
 # ==========================================
 # 1. SHARED CONSTANTS
@@ -19,7 +19,7 @@ ARC_CMAP = ListedColormap(ARC_COLORS)
 # 8. EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    spec: CanvasTemplateSpec = {
+    spec: CanvasFactorySpec = {
         "macro_puzzles_grid": {
             "type": "Rectangle",
             "color": 5,
@@ -216,7 +216,8 @@ if __name__ == "__main__":
         }
     }
 
-    canvas_spec = generate_canvas_spec(spec, "macro_puzzles_grid")
+    canvas_factory = build_factory(spec)
+    root_model = canvas_factory.generate_model("macro_puzzles_grid", 47, 47)
     print(canvas_spec)
     canvas = build_canvas(canvas_spec)
     grid_in = canvas.render()

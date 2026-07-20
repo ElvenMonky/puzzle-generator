@@ -5,6 +5,9 @@ import cattrs
 from z3 import Int, And, Or, If, Implies, Solver, sat, ModelRef
 from size_and_range import RangeSpec, SizeSpec, parse_range, range_expr, size_constraints
 
+KIND_DCOL = {0: 1, 1: 1, 2: 0, 3: -1, 4: -1, 5: -1, 6: 0, 7: 1}
+KIND_DROW = {0: 0, 1: 1, 2: 1, 3: 1, 4: 0, 5: -1, 6: -1, 7: -1}
+
 TypeSpec = Literal["None", "Line", "Point", "Polygon"]
 LinkOrderSpec = Literal["rng", "bfs", "dfs"]
 
@@ -122,7 +125,7 @@ class GeometryGroup:
             r -= w
         return self.resolve(GeometryReference())
 
-    def add_random(self, solver, templates: dict[str, "GeometryTemplate"], pw, ph, prefix: str):
+    def add_constraints(self, solver, templates: dict[str, "GeometryTemplate"], pw, ph, prefix: str):
         _, max_n, _ = parse_range(self.count)
         cnt = Int(f"{prefix}.cnt")
         solver.add(range_expr(cnt, self.count))
@@ -134,6 +137,18 @@ class GeometryGroup:
         w = [Int(f"{prefix}[{i}].w") for i in range(max_n)]
         h = [Int(f"{prefix}[{i}].h") for i in range(max_n)]
         slots = [self.pick_slot() for _ in range(max_n)]
+
+        link = self.link
+        if link is not None:
+            row = [Int(f"{prefix}[{i}].row") for i in range(max_n)]
+            col = [Int(f"{prefix}[{i}].col") for i in range(max_n)]
+            level = [Int(f"{prefix}[{i}].level") for i in range(max_n)]
+            parent = [Int(f"{prefix}[{i}].parent") for i in range(max_n)]
+            kind = [Int(f"{prefix}[{i}].kind") for i in range(max_n)]
+
+            solver.add(level[0] == 0, parent[0] == -1, kind[0] == -1)
+            solver.add(Or(cnt == 0, *[And(i < cnt, row[i] == 0) for i in range(max_n)]))
+            solver.add(Or(cnt == 0, *[And(i < cnt, col[i] == 0) for i in range(max_n)]))
 
         for i in range(max_n):
             active = i < cnt
@@ -147,14 +162,68 @@ class GeometryGroup:
             for c in size_constraints(x[i], y[i], w[i], h[i], size, pw, ph):
                 solver.add(Implies(active, c))
 
-            for j in range(i):
-                same_row = y[j] < y[i] + h[i] + gap
-                solver.add(Implies(active, Or(
-                    y[j] + h[j] + gap <= y[i],
-                    And(same_row, x[j] + w[j] + gap <= x[i]),
-                )))
+            if link is None:
+                for j in range(i):
+                    same_row = y[j] < y[i] + h[i] + gap
+                    solver.add(Implies(active, Or(
+                        y[j] + h[j] + gap <= y[i],
+                        And(same_row, x[j] + w[j] + gap <= x[i]),
+                    )))
+            else:
+                solver.add(If(active,
+                    And(row[i] >= 0, col[i] >= 0, level[i] >= 0),
+                    And(row[i] == 0, col[i] == 0, level[i] == 0)))
+                if i > 0:
+                    solver.add(If(active,
+                        And(kind[i] >= 0, kind[i] <= 7, parent[i] >= 0, parent[i] < i),
+                        And(kind[i] == -1, parent[i] == -1)))
+                solver.add(Implies(i < cnt, And([Or(row[i] != row[j], col[i] != col[j]) for j in range(i)])))
 
-        return cnt, x, y, w, h, slots
+                for axis, var in (("rows", row[i]), ("cols", col[i]), ("levels", level[i])):
+                    dim = getattr(self, axis)
+                    if dim is not None:
+                        _, hi, _ = parse_range(dim.count)
+                        solver.add(Implies(active, var < hi))
+
+                for j in range(i):
+                    is_parent = parent[i] == j
+                    solver.add(Implies(And(active, is_parent), level[i] == level[j] + 1))
+                    for k in range(8):
+                        solver.add(Implies(And(active, is_parent, kind[i] == k),
+                                            And(row[i] == row[j] + KIND_DROW[k], col[i] == col[j] + KIND_DCOL[k])))
+                    if j > 0:
+                        solver.add(Implies(And(active, is_parent, parent[j] == parent[i]), kind[j] < kind[i]))
+
+                    same_row = row[i] == row[j]
+                    same_col = col[i] == col[j]
+
+                    solver.add(Implies(And(active, same_row), If(
+                        col[i] > col[j], x[i] >= x[j] + w[j] + gap, x[j] >= x[i] + w[i] + gap)))
+                    solver.add(Implies(And(active, same_row, Or(col[i] - col[j] == 1, col[j] - col[i] == 1)),
+                        And(y[i] <= y[j] + h[j] - 1, y[j] <= y[i] + h[i] - 1)))
+
+                    solver.add(Implies(And(active, same_col), If(
+                        row[i] > row[j], y[i] >= y[j] + h[j] + gap, y[j] >= y[i] + h[i] + gap)))
+                    solver.add(Implies(And(active, same_col, Or(row[i] - row[j] == 1, row[j] - row[i] == 1)),
+                        And(x[i] <= x[j] + w[j] - 1, x[j] <= x[i] + w[i] - 1)))
+
+                    x_shift_ij = x[i] - x[j] >= 1 + gap
+                    x_shift_ji = x[j] - x[i] >= 1 + gap
+                    y_shift_ij = y[i] - y[j] >= 1 + gap
+                    y_shift_ji = y[j] - y[i] >= 1 + gap
+                    full_x_ij = x[i] >= x[j] + w[j] + gap
+                    full_x_ji = x[j] >= x[i] + w[i] + gap
+                    full_y_ij = y[i] >= y[j] + h[j] + gap
+                    full_y_ji = y[j] >= y[i] + h[i] + gap
+
+                    solver.add(Implies(And(active, row[i] - row[j] == 1, col[i] - col[j] == 1),
+                        Or(And(full_x_ij, y_shift_ij), And(full_y_ij, x_shift_ij))))
+                    solver.add(Implies(And(active, row[i] - row[j] == 1, col[j] - col[i] == 1),
+                        Or(And(full_x_ji, y_shift_ij), And(full_y_ij, x_shift_ji))))
+                    solver.add(Implies(And(active, row[j] - row[i] == 1, col[i] - col[j] == 1),
+                        Or(And(full_x_ij, y_shift_ji), And(full_y_ji, x_shift_ij))))
+                    solver.add(Implies(And(active, row[j] - row[i] == 1, col[j] - col[i] == 1),
+                        Or(And(full_x_ji, y_shift_ji), And(full_y_ji, x_shift_ji))))
 
 @dataclass
 class GeometryTemplate:
@@ -173,21 +242,17 @@ class GeometryTemplate:
     bh: Any = field(default=None, init=False, repr=False, compare=False)
     group_results: list = field(default=None, init=False, repr=False, compare=False)
 
-    def init_solver(self, templates: dict[str, "GeometryTemplate"]) -> "Solver":
-        if self.solver is not None:
-            return self.solver
-        self.bw = Int(f"{self.name}.w")
-        self.bh = Int(f"{self.name}.h")
-        solver = Solver()
-        self.group_results = [
-            g.add_random(solver, templates, self.bw, self.bh, f"{self.name}.g{i}")
-            for i, g in enumerate(self.geometries)
-        ]
-        self.solver = solver
-        return solver
+    def init_solver(self, templates: dict[str, "GeometryTemplate"]) -> Solver:
+        if self.solver is None:
+            self.bw = Int(f"{self.name}.w")
+            self.bh = Int(f"{self.name}.h")
+            self.solver = Solver()
+            for i, group in enumerate(self.geometries):
+                group.add_constraints(self.solver, templates, self.bw, self.bh, f"{self.name}.g{i}")
+        return self.solver
 
     def generate_model(self, templates: dict[str, "GeometryTemplate"], width: int, height: int,
-                        rng: Optional[random.Random] = None) -> "ModelRef":
+                        rng: Optional[random.Random] = None) -> ModelRef:
         solver = self.init_solver(templates)
         solver.set("random_seed", (rng or random).randint(0, 2**31 - 1))
         solver.push()
@@ -205,7 +270,7 @@ class CanvasFactory:
     templates: dict[str, GeometryTemplate]
 
     def generate_model(self, template: str, width: int, height: int,
-                        rng: Optional[random.Random] = None) -> "ModelRef":
+                       rng: Optional[random.Random] = None) -> ModelRef:
         return self.templates[template].generate_model(self.templates, width, height, rng)
 
 
