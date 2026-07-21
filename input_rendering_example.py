@@ -26,7 +26,16 @@ if __name__ == "__main__":
                         "count": 9,
                         "gap": 1,
                         "template": "puzzle_item",
-                        "link": { "cols": { "count": 3 } },
+                        "grid": {
+                            "cols": { "count": 3 },
+                            "rows": { "count": 3 },
+                            "cell_alignment": {
+                                "top": True,
+                                "bottom": True,
+                                "left": True,
+                                "right": True,
+                            }
+                        },
                         "prefix": [0, 1, 2, 3, 4, 5, 6, 7, 8],
                         "pool": [
                             {"template": "puzzle_1"},
@@ -62,7 +71,7 @@ if __name__ == "__main__":
                         "count": [2, 5],
                         "gap": 1,
                         "template": "puzzle_1_blob_piece",
-                        "link": {"order": "dfs", "dir": [0, 7]},
+                        "grid": {"order": "dfs", "dir": [0, 7]},
                         "prefix": [0],
                         "pattern": [-1],
                         "pool": [
@@ -95,7 +104,7 @@ if __name__ == "__main__":
                 "geometries": [
                     {
                         "count": 9,
-                        "link": { "cols": { "count": 3 } },
+                        "grid": { "cols": { "count": 3 } },
                         "template": "puzzle_2_tile",
                         "tag": "the tile",
                         "pattern": [0],
@@ -117,7 +126,7 @@ if __name__ == "__main__":
                     {
                         "count": [1, 5],
                         "gap": 1,
-                        "link": {},
+                        "grid": {},
                         "template": "puzzle_2_mark"
                     }
                 ]
@@ -141,7 +150,7 @@ if __name__ == "__main__":
                         "prefix": [0],
                         "pattern": [1],
                         "template": "puzzle_3_node",
-                        "link": {"order": "bfs", "dir": [0, 7], "root_dir": [0, 7]},
+                        "grid": {"order": "bfs", "dir": [0, 7], "root_dir": [0, 7]},
                         
                     }
                 ],
@@ -163,7 +172,7 @@ if __name__ == "__main__":
                         "margin": 1,
                         "gap": 0,
                         "template": "puzzle_4_point",
-                        "link": {"order": "rng"},
+                        "grid": {"order": "rng"},
                         "pool": [{"template": "puzzle_4_point"}],
                     }
                 ],

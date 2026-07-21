@@ -28,7 +28,13 @@ class DimensionSpec(TypedDict, total=False):
     prefix: list[int]
     pattern: list[int]
 
-class LinkSpec(TypedDict, total=False):
+class AlignmentSpec(TypedDict, total=False):
+    top: bool
+    bottom: bool
+    left: bool
+    right: bool
+
+class GridSpec(TypedDict, total=False):
     order: LinkOrderSpec
     dir: RangeSpec
     root_dir: RangeSpec
@@ -37,6 +43,7 @@ class LinkSpec(TypedDict, total=False):
     cols: DimensionSpec
     color: RangeSpec
     above: bool
+    cell_alignment: AlignmentSpec
 
 class GeometryTemplateSpec(TypedDict, total=False):
     template: str
@@ -57,7 +64,7 @@ class GeometryReferenceSpec(GeometryTemplateSpec, total=False):
 class GeometryGroupSpec(DimensionSpec, GeometryReferenceSpec, total=False):
     gap: RangeSpec
     margin: RangeSpec
-    link: LinkSpec
+    grid: GridSpec
     pool: list[GeometryReferenceSpec]
 
 class CanvasFactorySpec(TypedDict):
@@ -84,7 +91,7 @@ class DimensionData:
     pattern: list[int] = field(default_factory=list)
 
 @dataclass
-class LinkData:
+class GridData:
     order: LinkOrderSpec = "rng"
     dir: RangeSpec = 0
     root_dir: RangeSpec = 0
@@ -93,6 +100,7 @@ class LinkData:
     cols: Optional[DimensionData] = None
     color: RangeSpec = -1
     above: bool = False
+    cell_alignment: dict = field(default_factory=dict)
 
 @dataclass
 class GeometryGroup(BoundedSolver):
@@ -105,7 +113,7 @@ class GeometryGroup(BoundedSolver):
     pattern: list[int] = field(default_factory=list)
     gap: RangeSpec = 0
     margin: RangeSpec = 0
-    link: Optional[LinkData] = None
+    grid: Optional[GridData] = None
     pool: list[GeometryReference] = field(default_factory=list)
 
     size: SizeSpec = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -150,8 +158,8 @@ class GeometryGroup(BoundedSolver):
 
         result = {"cnt": cnt, "x": x, "y": y, "w": w, "h": h, "slot": slot}
 
-        link = self.link
-        if link is not None:
+        grid = self.grid
+        if grid is not None:
             row = [Int(f"{prefix}[{i}].row") for i in range(max_n)]
             col = [Int(f"{prefix}[{i}].col") for i in range(max_n)]
             level = [Int(f"{prefix}[{i}].level") for i in range(max_n)]
@@ -179,7 +187,7 @@ class GeometryGroup(BoundedSolver):
                 if csts:
                     solver.add(Implies(And(active, slot[i] == idx), And(csts)))
 
-            if link is None:
+            if grid is None:
                 for j in range(i):
                     same_row = y[j] < y[i] + h[i] + gap
                     solver.add(Implies(active, Or(
@@ -197,7 +205,7 @@ class GeometryGroup(BoundedSolver):
                 solver.add(Implies(i < cnt, And([Or(row[i] != row[j], col[i] != col[j]) for j in range(i)])))
 
                 for axis, var in (("rows", row[i]), ("cols", col[i]), ("levels", level[i])):
-                    dim = getattr(link, axis)
+                    dim = getattr(grid, axis)
                     if dim is not None:
                         _, hi, _ = parse_range(dim.count)
                         solver.add(Implies(active, var < hi))
@@ -214,33 +222,43 @@ class GeometryGroup(BoundedSolver):
                     same_row = row[i] == row[j]
                     same_col = col[i] == col[j]
 
+                    alignment = grid.cell_alignment
+                    if alignment.get("top"):
+                        solver.add(Implies(And(active, same_row), y[i] == y[j]))
+                    if alignment.get("bottom"):
+                        solver.add(Implies(And(active, same_row), y[i] + h[i] == y[j] + h[j]))
+                    if alignment.get("left"):
+                        solver.add(Implies(And(active, same_col), x[i] == x[j]))
+                    if alignment.get("right"):
+                        solver.add(Implies(And(active, same_col), x[i] + w[i] == x[j] + w[j]))
+
                     solver.add(Implies(And(active, same_row), If(
                         col[i] > col[j], x[i] >= x[j] + w[j] + gap, x[j] >= x[i] + w[i] + gap)))
-                    solver.add(Implies(And(active, same_row, Or(col[i] - col[j] == 1, col[j] - col[i] == 1)),
+                    solver.add(Implies(And(active, same_row),
                         And(y[i] <= y[j] + h[j] - 1, y[j] <= y[i] + h[i] - 1)))
+                    solver.add(Implies(And(active, row[i] != row[j]), If(
+                        row[i] > row[j], y[i] >= y[j] + 1 + gap, y[j] >= y[i] + 1 + gap)))
 
                     solver.add(Implies(And(active, same_col), If(
                         row[i] > row[j], y[i] >= y[j] + h[j] + gap, y[j] >= y[i] + h[i] + gap)))
-                    solver.add(Implies(And(active, same_col, Or(row[i] - row[j] == 1, row[j] - row[i] == 1)),
+                    solver.add(Implies(And(active, same_col),
                         And(x[i] <= x[j] + w[j] - 1, x[j] <= x[i] + w[i] - 1)))
+                    solver.add(Implies(And(active, col[i] != col[j]), If(
+                        col[i] > col[j], x[i] >= x[j] + 1 + gap, x[j] >= x[i] + 1 + gap)))
 
-                    x_shift_ij = x[i] - x[j] >= 1 + gap
-                    x_shift_ji = x[j] - x[i] >= 1 + gap
-                    y_shift_ij = y[i] - y[j] >= 1 + gap
-                    y_shift_ji = y[j] - y[i] >= 1 + gap
                     full_x_ij = x[i] >= x[j] + w[j] + gap
                     full_x_ji = x[j] >= x[i] + w[i] + gap
                     full_y_ij = y[i] >= y[j] + h[j] + gap
                     full_y_ji = y[j] >= y[i] + h[i] + gap
 
                     solver.add(Implies(And(active, row[i] - row[j] == 1, col[i] - col[j] == 1),
-                        Or(And(full_x_ij, y_shift_ij), And(full_y_ij, x_shift_ij))))
+                        Or(full_x_ij, full_y_ij)))
                     solver.add(Implies(And(active, row[i] - row[j] == 1, col[j] - col[i] == 1),
-                        Or(And(full_x_ji, y_shift_ij), And(full_y_ij, x_shift_ji))))
+                        Or(full_x_ji, full_y_ij)))
                     solver.add(Implies(And(active, row[j] - row[i] == 1, col[i] - col[j] == 1),
-                        Or(And(full_x_ij, y_shift_ji), And(full_y_ji, x_shift_ij))))
+                        Or(full_x_ij, full_y_ji)))
                     solver.add(Implies(And(active, row[j] - row[i] == 1, col[j] - col[i] == 1),
-                        Or(And(full_x_ji, y_shift_ji), And(full_y_ji, x_shift_ji))))
+                        Or(full_x_ji, full_y_ji)))
 
         return result
 
@@ -317,8 +335,8 @@ def _structure_group(data: GeometryGroupSpec, _) -> GeometryGroup:
             if not isinstance(val, dict):
                 val = {"count": val}
             kwargs[axis] = factory_converter.structure(val, DimensionData)
-    if "link" in kwargs:
-        kwargs["link"] = factory_converter.structure(kwargs["link"], LinkData)
+    if "grid" in kwargs:
+        kwargs["grid"] = factory_converter.structure(kwargs["grid"], GridData)
     return GeometryGroup(**kwargs)
 
 def _structure_template(data: GeometryTemplateSpec, _) -> GeometryTemplate:
