@@ -30,6 +30,7 @@ class LinkSpec(TypedDict, total=False):
     above: bool
 
 class GeometryTemplateSpec(TypedDict, total=False):
+    template: str
     type: TypeSpec
     size: SizeSpec
     color: RangeSpec
@@ -136,7 +137,13 @@ class GeometryGroup:
         y = [Int(f"{prefix}[{i}].y") for i in range(max_n)]
         w = [Int(f"{prefix}[{i}].w") for i in range(max_n)]
         h = [Int(f"{prefix}[{i}].h") for i in range(max_n)]
-        slots = [self.pick_slot() for _ in range(max_n)]
+
+        own_weight = self.weight if self.template is not None else 0
+        viable = own_weight + sum((r.weight or 0) for r in self.pool) > 0
+        if not viable:
+            solver.add(cnt == 0)
+        slots = [self.pick_slot() if viable else GeometryReference() for _ in range(max_n)]
+        result = {"cnt": cnt, "x": x, "y": y, "w": w, "h": h, "slots": slots}
 
         link = self.link
         if link is not None:
@@ -145,10 +152,13 @@ class GeometryGroup:
             level = [Int(f"{prefix}[{i}].level") for i in range(max_n)]
             parent = [Int(f"{prefix}[{i}].parent") for i in range(max_n)]
             kind = [Int(f"{prefix}[{i}].kind") for i in range(max_n)]
+            result.update(row=row, col=col, level=level, parent=parent, kind=kind)
 
             solver.add(level[0] == 0, parent[0] == -1, kind[0] == -1)
             solver.add(Or(cnt == 0, *[And(i < cnt, row[i] == 0) for i in range(max_n)]))
             solver.add(Or(cnt == 0, *[And(i < cnt, col[i] == 0) for i in range(max_n)]))
+            for i in range(max_n):
+                solver.add(row[i] < max_n, col[i] < max_n, level[i] < max_n)
 
         for i in range(max_n):
             active = i < cnt
@@ -157,8 +167,8 @@ class GeometryGroup:
             solver.add(Implies(active, y[i] >= margin))
             solver.add(Implies(active, x[i] + w[i] <= pw - margin))
             solver.add(Implies(active, y[i] + h[i] <= ph - margin))
-            tmpl = templates[slots[i].template]
-            size = {**tmpl.size, **slots[i].overrides.get("size", {})}
+            tmpl = templates.get(slots[i].template)
+            size = {**(tmpl.size if tmpl is not None else {}), **slots[i].overrides.get("size", {})}
             for c in size_constraints(x[i], y[i], w[i], h[i], size, pw, ph):
                 solver.add(Implies(active, c))
 
@@ -225,6 +235,8 @@ class GeometryGroup:
                     solver.add(Implies(And(active, row[j] - row[i] == 1, col[j] - col[i] == 1),
                         Or(And(full_x_ji, y_shift_ji), And(full_y_ji, x_shift_ji))))
 
+        return result
+
 @dataclass
 class GeometryTemplate:
     name: str
@@ -243,13 +255,17 @@ class GeometryTemplate:
     group_results: list = field(default=None, init=False, repr=False, compare=False)
 
     def init_solver(self, templates: dict[str, "GeometryTemplate"]) -> Solver:
-        if self.solver is None:
-            self.bw = Int(f"{self.name}.w")
-            self.bh = Int(f"{self.name}.h")
-            self.solver = Solver()
-            for i, group in enumerate(self.geometries):
-                group.add_constraints(self.solver, templates, self.bw, self.bh, f"{self.name}.g{i}")
-        return self.solver
+        if self.solver is not None:
+            return self.solver
+        self.bw = Int(f"{self.name}.w")
+        self.bh = Int(f"{self.name}.h")
+        solver = Solver()
+        self.group_results = [
+            group.add_constraints(solver, templates, self.bw, self.bh, f"{self.name}.g{i}")
+            for i, group in enumerate(self.geometries)
+        ]
+        self.solver = solver
+        return solver
 
     def generate_model(self, templates: dict[str, "GeometryTemplate"], width: int, height: int,
                         rng: Optional[random.Random] = None) -> ModelRef:
@@ -303,18 +319,38 @@ def _structure_group(data: GeometryGroupSpec, _) -> GeometryGroup:
 
 def _structure_template(data: GeometryTemplateSpec, _) -> GeometryTemplate:
     fields = set(GeometryTemplate.__dataclass_fields__) - {"name"}
-    kwargs = {k: v for k, v in data.items() if k in fields}
+    kwargs = {k: v for k, v in data.items() if k in fields} if data is not None else {}
     kwargs["geometries"] = [factory_converter.structure(g, GeometryGroup) for g in kwargs.get("geometries", [])]
     return GeometryTemplate(name="", **kwargs)
 
 def _structure_factory(data: CanvasFactorySpec, _) -> CanvasFactory:
     templates = {}
-    for name, spec in data["templates"].items():
-        tmpl = factory_converter.structure(spec, GeometryTemplate)
+    spec_map = data["templates"]
+    resolved = {}
+
+    def resolve(name: str) -> dict:
+        if name in resolved:
+            return resolved[name]
+        spec = spec_map[name]
+        parent_name = spec.get("template")
+        if parent_name:
+            spec = resolve(parent_name).copy().update(spec)
+        resolved[name] = spec
+        return spec
+
+    # Resolve all templates
+    for name in spec_map:
+        resolve(name)
+
+    # Convert each resolved spec
+    for name, merged_spec in resolved.items():
+        tmpl = factory_converter.structure(merged_spec, GeometryTemplate)
         tmpl.name = name
         templates[name] = tmpl
+
     return CanvasFactory(root=data["root"], templates=templates)
 
+factory_converter.register_structure_hook(int | list[int], lambda v, t: v)
 factory_converter.register_structure_hook(GeometryReference, _structure_reference)
 factory_converter.register_structure_hook(GeometryGroup, _structure_group)
 factory_converter.register_structure_hook(GeometryTemplate, _structure_template)

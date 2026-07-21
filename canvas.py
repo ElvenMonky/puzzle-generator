@@ -64,7 +64,7 @@ class Geometry:
         [(x, y), (-y, x), (-x, -y), (y, -x), (x, -y), (y, x), (-x, y), (-y, -x)][d // 2]
         if d % 2 == 1:
             x, y = _rotate45(x, y)
-        return x + self.x, y + self.y
+        return x + self.x, y + self.y, c
 
     def render_own_geometry(self, inherited_color: Optional[int] = None) -> ColoredPointsSpec:
         if not self.vertices:
