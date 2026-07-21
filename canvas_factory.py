@@ -1,6 +1,6 @@
 import random
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional, TypedDict, Union
+from typing import Any, Literal, Optional, TypedDict
 import cattrs
 from z3 import Int, And, Or, If, Implies, Solver, sat, ModelRef
 from size_and_range import RangeSpec, SizeSpec, parse_range, range_expr, size_constraints
@@ -21,6 +21,11 @@ class OriginSpec(TypedDict, total=False):
     x: RangeSpec
     y: RangeSpec
     color: RangeSpec
+
+class DimensionSpec(TypedDict, total=False):
+    count: RangeSpec
+    prefix: list[int]
+    pattern: list[int]
 
 class LinkSpec(TypedDict, total=False):
     order: LinkOrderSpec
@@ -45,14 +50,8 @@ class GeometryTemplateSpec(TypedDict, total=False):
 class GeometryReferenceSpec(GeometryTemplateSpec, total=False):
     template: str
     tag: str
-    weight: RangeSpec
     dir: RangeSpec
     origin: OriginSpec
-
-class DimensionSpec(TypedDict, total=False):
-    count: RangeSpec
-    prefix: list[int]
-    pattern: list[int]
 
 class GeometryGroupSpec(DimensionSpec, GeometryReferenceSpec, total=False):
     gap: RangeSpec
@@ -68,7 +67,6 @@ class CanvasFactorySpec(TypedDict):
 class GeometryReference:
     template: Optional[str] = None
     tag: Optional[str] = None
-    weight: Optional[RangeSpec] = None
     dir: Optional[RangeSpec] = None
     origin: Optional[OriginSpec] = None
     overrides: dict[str, Any] = field(default_factory=dict)
@@ -94,7 +92,6 @@ class LinkData:
 class GeometryGroup:
     template: Optional[str] = None
     tag: Optional[str] = None
-    weight: RangeSpec = 1
     dir: RangeSpec = 0
     origin: OriginSpec = field(default_factory=dict)
     count: RangeSpec = 1
