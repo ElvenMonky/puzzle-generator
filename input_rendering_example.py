@@ -3,113 +3,86 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-from typing import Any, Dict, Optional
+from typing import Optional
 from canvas import build_canvas, Geometry, CanvasSpec, GeometrySpec
-from canvas_factory import build_factory, CanvasFactory, GeometryTemplateSpec, CanvasFactorySpec, GeometryReference
+from canvas_factory import build_factory, CanvasFactory, GeometryTemplateSpec, CanvasFactorySpec, GeometryGroup
+from size_and_range import roll_range
 
-def canvas_spec_from_factory(
-    factory: CanvasFactory,
-    rng: Optional[random.Random] = None
-) -> CanvasSpec:
-    size = factory.templates[factory.root].size
-    # TODO: pick width and height based on size constraints
-    width = size["width"]
-    height = size["height"]
-    root_geom = _extract_template(factory, factory.root, width, height, {}, rng, 0, 0)
+def canvas_spec_from_factory(factory: CanvasFactory, rng: Optional[random.Random] = None) -> CanvasSpec:
+    rng = rng or random.Random()
+    root_size = factory.templates[factory.root].size
+    width = roll_range(root_size.get("width", 1), rng)
+    height = roll_range(root_size.get("height", 1), rng)
+    root_geom = _extract_template(factory, factory.root, width, height, rng)
     return {"width": width, "height": height, "geometries": [root_geom]}
 
-def resolve_range_value(rng_spec, rng: random.Random, default=None):
-    """Resolve a RangeSpec (int | list[int]) to a concrete value."""
-    if rng_spec is None:
-        return default
-    if isinstance(rng_spec, list):
-        if len(rng_spec) == 2:
-            return (rng or random).randint(rng_spec[0], rng_spec[1])
-        elif len(rng_spec) == 1:
-            return rng_spec[0]
-        else:
-            return default
-    return rng_spec
+def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rng: random.Random) -> list[GeometrySpec]:
+    result = group.result
+    items = []
+    cnt_val = model[result["cnt"]].as_long()
+    for i in range(cnt_val):
+        x = model[result["x"][i]].as_long()
+        y = model[result["y"][i]].as_long()
+        w = model[result["w"][i]].as_long()
+        h = model[result["h"][i]].as_long()
+        slot_val = model[result["slot"][i]].as_long()
 
-def _extract_template(
-    factory: CanvasFactory,
-    template_name: str,
-    width: int,
-    height: int,
-    overrides: Dict[str, Any],
-    rng: random.Random,
-    offset_x: int,
-    offset_y: int
-) -> GeometrySpec:
+        ref = None
+        template_name = group.template
+        if 0 <= slot_val < len(group.pool):
+            ref = group.pool[slot_val]
+            template_name = ref.template if ref.template is not None else group.template
+        if template_name is None:
+            continue
+
+        child = _extract_template(factory, template_name, w, h, rng)
+        child["x"] = x
+        child["y"] = y
+        dir_spec = ref.dir if ref is not None and ref.dir is not None else group.dir
+        child["dir"] = roll_range(dir_spec, rng)
+
+        if ref is not None:
+            extra_groups = ref.overrides.get("geometries", [])
+            if extra_groups:
+                extra_models = ref.generate_models(w, h, rng)
+                for extra_group, extra_model in zip(extra_groups, extra_models):
+                    child["geometries"].extend(_extract_group_items(factory, extra_group, extra_model, rng))
+
+        items.append(child)
+    return items
+
+def _extract_template(factory: CanvasFactory, template_name: str, width: int, height: int,
+                       rng: random.Random) -> GeometrySpec:
     tmpl = factory.templates[template_name]
-    # Generate model for this template with the given dimensions
-    model = factory.generate_model(template_name, width, height, rng)
-
-    # Ensure group results are available
-    if tmpl.group_results is None:
-        tmpl.init_solver(factory.templates)
+    models = factory.generate_group_models(template_name, width, height, rng)
 
     child_geoms = []
+    for group, model in zip(tmpl.geometries, models):
+        child_geoms.extend(_extract_group_items(factory, group, model, rng))
 
-    # Process each geometry group of the template
-    for group, result in zip(tmpl.geometries, tmpl.group_results):
-        cnt_val = model[result["cnt"]].as_long()
-        for i in range(cnt_val):
-            x = model[result["x"][i]].as_long()
-            y = model[result["y"][i]].as_long()
-            w = model[result["w"][i]].as_long()
-            h = model[result["h"][i]].as_long()
+    color = roll_range(tmpl.color, rng) if tmpl.color is not None else None
+    edge_color = roll_range(tmpl.edge_color, rng) if tmpl.edge_color is not None else None
+    vertice_color = roll_range(tmpl.vertice_color, rng) if tmpl.vertice_color is not None else None
 
-            slot_val = model[result["slot"][i]].as_long()
-            if slot_val == -1 or slot_val >= len(group.pool):
-                ref = GeometryReference(template=group.template)
-            else:
-                ref = group.resolve(group.pool[slot_val])
-            slot = ref
-
-            slot_tmpl_name = slot.template if slot.template is not None else group.template
-            if slot_tmpl_name is None:
-                continue
-
-            slot_overrides = slot.overrides.copy()
-
-            child_geom = _extract_template(
-                factory,
-                slot_tmpl_name,
-                w, h,
-                slot_overrides,
-                rng,
-                offset_x + x,
-                offset_y + y
-            )
-
-            child_geom["dir"] = slot.dir if slot.dir is not None else group.dir
-            child_geoms.append(child_geom)
-
-    # Build the GeometrySpec for this template's own shape
-    eff_type = overrides.get("type", tmpl.type)
-    eff_color = resolve_range_value(overrides.get("color", tmpl.color), rng, -1)
-    eff_edge_color = resolve_range_value(overrides.get("edge_color", tmpl.edge_color), rng, None)
-    eff_vertice_color = resolve_range_value(overrides.get("vertice_color", tmpl.vertice_color), rng, None)
-
-    if eff_type == "Point":
+    if tmpl.type == "Point":
         vertices = [(width // 2, height // 2)]
-    elif eff_type == "None":
+    elif tmpl.type == "None":
         vertices = []
-    else:  # Rectangle, Polygon, default to rectangle
+    else:
         vertices = [(0, 0), (width - 1, 0), (width - 1, height - 1), (0, height - 1)]
 
-    geom_spec: GeometrySpec = {
-        "x": offset_x,
-        "y": offset_y,
-        "dir": 0,
+    # x/y left at 0 here: this geometry's own position within ITS parent is set by
+    # the caller (_extract_group_items), since Geometry.render() composes offsets
+    # recursively through the parent/child tree — each level only needs its own
+    # local x/y, never an accumulated absolute one.
+    return {
+        "x": 0, "y": 0, "dir": 0,
         "vertices": vertices,
-        "color": eff_color,
-        "edge_color": eff_edge_color,
-        "vertice_color": eff_vertice_color,
+        "color": color,
+        "edge_color": edge_color,
+        "vertice_color": vertice_color,
         "geometries": child_geoms,
     }
-    return geom_spec
 
 # ==========================================
 # 1. SHARED CONSTANTS
@@ -126,31 +99,30 @@ ARC_CMAP = ListedColormap(ARC_COLORS)
 if __name__ == "__main__":
     templates: dict[str, GeometryTemplateSpec] = {
         "macro_puzzles_grid": {
-            "type": "Rectangle",
+            "type": "Polygon",
             "color": 5,
-            "size": { "width": 47, "height": 47 },
+            "size": {"width": 47, "height": 47},
             "geometries": [
                 {
                     "count": 9,
-                    "cols": 3,
                     "gap": 1,
-                    "strategy": "flow",
                     "template": "puzzle_item",
+                    "link": { "cols": { "count": 3 } },
                     "prefix": [0, 1, 2, 3, 4, 5, 6, 7, 8],
                     "pool": [
-                        { "template": "puzzle_1" },
-                        { "template": "puzzle_2" },
-                        { "template": "puzzle_3" },
-                        { "template": "puzzle_4" },
-                        { "template": "puzzle_5" }
-                    ]
+                        {"template": "puzzle_1"},
+                        {"template": "puzzle_2"},
+                        {"template": "puzzle_3"},
+                        {"template": "puzzle_4"},
+                        {"template": "puzzle_5"},
+                    ],
                 }
-            ]
+            ],
         },
         "puzzle_item": {
+            "type": "Polygon",
             "color": 0,
-            "size": { "width": 15, "height": 15 },
-            "type": "Rectangle",
+            "size": {"width": 15, "height": 15},
         },
         "puzzle_1": {
             "template": "puzzle_item",
@@ -158,26 +130,20 @@ if __name__ == "__main__":
                 {
                     "count": [2, 4],
                     "gap": 1,
-                    "strategy": "random",
                     "template": "puzzle_1_blob"
                 }
-            ]
+            ],
         },
         "puzzle_1_blob": {
+            "type": "None",
             "color": 1,
             "size": {"min": [3, 7], "max": [7, 11]},
-            "type": "None",
             "geometries": [
                 {
                     "count": [2, 5],
                     "gap": 1,
-                    "link": {
-                        "gap": [1, 3],
-                        "color": 2
-                    },
-                    "size": {"min": [3, 5], "max": [3, 7]},
-                    "strategy": "tree",
                     "template": "puzzle_1_blob_piece",
+                    "link": {"order": "dfs", "dir": [0, 7]},
                     "prefix": [0],
                     "pool": [
                         {
@@ -191,15 +157,17 @@ if __name__ == "__main__":
                         }
                     ]
                 }
-            ]
+            ],
         },
         "puzzle_1_blob_piece": {
+            "type": "Polygon",
+            "color": 2,
             "size": {"min": [3, 5], "max": [3, 7]},
-            "type": "Rectangle",
         },
         "puzzle_1_blob_point": {
             "type": "Point",
-            "color": [3, 9]
+            "color": [3, 9],
+            "size": {"width": 1, "height": 1},
         },
         "puzzle_2": {
             "template": "puzzle_item",
@@ -246,33 +214,26 @@ if __name__ == "__main__":
             "template": "puzzle_item",
             "geometries": [
                 {
-                    "count": 9,
-                    "margin": 1,
+                    "count": [4, 9],
                     "gap": 1,
-                    "strategy": "tree",
-                    "levels": 1,
-                    "pool": [
-                        { "template": "puzzle_3_root" }
-                    ],
+                    "margin": 1,
+                    "pool": [{"template": "puzzle_3_root"}],
                     "prefix": [0],
                     "pattern": [1],
-                    "link": {
-                        "gap": 3,
-                        "color": 2,
-                        "above": 1
-                    },
-                    "template": "puzzle_3_node"
+                    "template": "puzzle_3_node",
+                    "link": {"order": "bfs", "dir": [0, 7], "root_dir": [0, 7]},
+                    
                 }
-            ]
+            ],
         },
         "puzzle_3_root": {
             "type": "Point",
             "color": [3, 8]
         },
         "puzzle_3_node": {
-            "type": "Rectangle",
-            "size": { "width": 3, "height": 3 },
-            "color": 9
+            "type": "Polygon",
+            "color": 9,
+            "size": {"width": 3, "height": 3},
         },
         "puzzle_4": {
             "template": "puzzle_item",
@@ -281,14 +242,16 @@ if __name__ == "__main__":
                     "count": [10, 20],
                     "margin": 1,
                     "gap": 0,
-                    "strategy": "tree",
                     "template": "puzzle_4_point",
+                    "link": {"order": "rng"},
+                    "pool": [{"template": "puzzle_4_point"}],
                 }
-            ]
+            ],
         },
         "puzzle_4_point": {
             "type": "Point",
-            "color": 9
+            "color": 9,
+            "size": {"width": 1, "height": 1},
         },
         "puzzle_5": {
             "template": "puzzle_item",
@@ -312,7 +275,7 @@ if __name__ == "__main__":
     }
     spec: CanvasFactorySpec = {
         "root": "macro_puzzles_grid",
-        "templates": templates
+        "templates": templates,
     }
 
     canvas_factory = build_factory(spec)

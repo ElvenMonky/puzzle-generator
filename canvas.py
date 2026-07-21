@@ -59,9 +59,9 @@ class Geometry:
     vertices: PointsSpec = field(default_factory=list)
     geometries: list["Geometry"] = field(default_factory=list)
 
-    def transform(self, x: int, y: int, c: Optional[int]) -> tuple[int, int]:
+    def transform(self, x: int, y: int, c: Optional[int]) -> tuple[int, int, Optional[int]]:
         d = self.dir
-        [(x, y), (-y, x), (-x, -y), (y, -x), (x, -y), (y, x), (-x, y), (-y, -x)][d // 2]
+        x, y = [(x, y), (-y, x), (-x, -y), (y, -x), (x, -y), (y, x), (-x, y), (-y, -x)][d // 2]
         if d % 2 == 1:
             x, y = _rotate45(x, y)
         return x + self.x, y + self.y, c
