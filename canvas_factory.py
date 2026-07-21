@@ -2,7 +2,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional, TypedDict
 import cattrs
-from z3 import Int, And, Or, If, Implies, Solver, sat, ModelRef
+from z3 import Int, And, Or, If, Implies, ModelRef
 from size_and_range import RangeSpec, SizeSpec, parse_range, range_expr, size_constraints
 from bounded_solver import BoundedSolver
 
