@@ -68,26 +68,7 @@ def _extract_template(
                 offset_y + y
             )
 
-            # Apply slot's direction (if any) to the child's root shape
-            eff_dir = slot.dir if slot.dir is not None else group.dir
-            child_geom["dir"] = eff_dir
-
-            # If slot overrides contain extra geometries (static specs), add them as children
-            if "geometries" in slot_overrides:
-                # The override geometries are assumed to be simple (no nested templates)
-                extra = slot_overrides["geometries"]
-                if isinstance(extra, list):
-                    for g_spec in extra:
-                        # Convert the spec to a GeometrySpec (it may be a dict)
-                        # Here we assume it's already a valid GeometrySpec-like dict
-                        # but we need to offset it relative to the child's origin.
-                        # For simplicity, we offset all coordinates by (offset_x + x, offset_y + y)
-                        # and keep the rest as is.
-                        extra_geom = g_spec.copy()
-                        extra_geom["x"] = extra_geom.get("x", 0) + offset_x + x
-                        extra_geom["y"] = extra_geom.get("y", 0) + offset_y + y
-                        child_geom["geometries"].append(extra_geom)
-
+            child_geom["dir"] = slot.dir if slot.dir is not None else group.dir
             child_geoms.append(child_geom)
 
     # Build the GeometrySpec for this template's own shape
@@ -103,7 +84,7 @@ def _extract_template(
     elif eff_type == "None":
         vertices = []
     else:  # Rectangle, Polygon, default to rectangle
-        vertices = [(0, 0), (width, 0), (width, height), (0, height)]
+        vertices = [(0, 0), (width - 1, 0), (width - 1, height - 1), (0, height - 1)]
 
     geom_spec: GeometrySpec = {
         "x": offset_x,

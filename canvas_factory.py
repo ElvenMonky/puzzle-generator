@@ -26,6 +26,9 @@ class LinkSpec(TypedDict, total=False):
     order: LinkOrderSpec
     dir: RangeSpec
     root_dir: RangeSpec
+    levels: DimensionSpec
+    rows: DimensionSpec
+    cols: DimensionSpec
     color: RangeSpec
     above: bool
 
@@ -54,9 +57,6 @@ class DimensionSpec(TypedDict, total=False):
 class GeometryGroupSpec(DimensionSpec, GeometryReferenceSpec, total=False):
     gap: RangeSpec
     margin: RangeSpec
-    levels: DimensionSpec
-    rows: DimensionSpec
-    cols: DimensionSpec
     link: LinkSpec
     pool: list[GeometryReferenceSpec]
 
@@ -84,6 +84,9 @@ class LinkData:
     order: LinkOrderSpec = "rng"
     dir: RangeSpec = 0
     root_dir: RangeSpec = 0
+    levels: Optional[DimensionData] = None
+    rows: Optional[DimensionData] = None
+    cols: Optional[DimensionData] = None
     color: RangeSpec = -1
     above: bool = False
 
@@ -99,9 +102,6 @@ class GeometryGroup:
     pattern: list[int] = field(default_factory=list)
     gap: RangeSpec = 0
     margin: RangeSpec = 0
-    levels: Optional[DimensionData] = None
-    rows: Optional[DimensionData] = None
-    cols: Optional[DimensionData] = None
     link: Optional[LinkData] = None
     pool: list[GeometryReference] = field(default_factory=list)
 
@@ -109,7 +109,6 @@ class GeometryGroup:
         return GeometryReference(
             template=ref.template if ref.template is not None else self.template,
             tag=ref.tag if ref.tag is not None else self.tag,
-            weight=ref.weight if ref.weight is not None else self.weight,
             dir=ref.dir if ref.dir is not None else self.dir,
             origin=ref.origin if ref.origin is not None else self.origin,
             overrides=ref.overrides,
@@ -142,7 +141,30 @@ class GeometryGroup:
         viable = own_weight + sum((r.weight or 0) for r in self.pool) > 0
         if not viable:
             solver.add(cnt == 0)
-        slots = [self.pick_slot() if viable else GeometryReference() for _ in range(max_n)]
+        slots = []
+        for i in range(max_n):
+            if not viable:
+                slots.append(GeometryReference())
+                continue
+
+            # 1. Use prefix for the first len(prefix) slots
+            if self.prefix and i < len(self.prefix):
+                idx = self.prefix[i]
+                if 0 <= idx < len(self.pool):
+                    slots.append(self.resolve(self.pool[idx]))
+                    continue
+                # invalid index → fall back to weighted random
+            # 2. Use pattern for slots after prefix
+            elif self.pattern and (i - len(self.prefix)) >= 0:
+                idx = self.pattern[(i - len(self.prefix)) % len(self.pattern)]
+                if 0 <= idx < len(self.pool):
+                    slots.append(self.resolve(self.pool[idx]))
+                    continue
+                # invalid index → fall back to weighted random
+
+            # 3. Fallback: weighted random choice (group default vs pool items)
+            slots.append(self.pick_slot())
+
         result = {"cnt": cnt, "x": x, "y": y, "w": w, "h": h, "slots": slots}
 
         link = self.link
@@ -190,7 +212,7 @@ class GeometryGroup:
                 solver.add(Implies(i < cnt, And([Or(row[i] != row[j], col[i] != col[j]) for j in range(i)])))
 
                 for axis, var in (("rows", row[i]), ("cols", col[i]), ("levels", level[i])):
-                    dim = getattr(self, axis)
+                    dim = getattr(link, axis)
                     if dim is not None:
                         _, hi, _ = parse_range(dim.count)
                         solver.add(Implies(active, var < hi))
@@ -334,7 +356,9 @@ def _structure_factory(data: CanvasFactorySpec, _) -> CanvasFactory:
         spec = spec_map[name]
         parent_name = spec.get("template")
         if parent_name:
-            spec = resolve(parent_name).copy().update(spec)
+            temp = resolve(parent_name).copy()
+            temp.update(spec)
+            spec = temp
         resolved[name] = spec
         return spec
 
