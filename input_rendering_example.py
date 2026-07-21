@@ -44,7 +44,7 @@ def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rn
         if ref is not None:
             extra_groups = ref.overrides.get("geometries", [])
             if extra_groups:
-                extra_models = ref.generate_models(w, h, rng)
+                extra_models = ref.generate_child_models(w, h, rng)
                 for extra_group, extra_model in zip(extra_groups, extra_models):
                     child["geometries"].extend(_extract_group_items(factory, extra_group, extra_model, rng))
 
@@ -54,7 +54,7 @@ def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rn
 def _extract_template(factory: CanvasFactory, template_name: str, width: int, height: int,
                        rng: random.Random) -> GeometrySpec:
     tmpl = factory.templates[template_name]
-    models = factory.generate_group_models(template_name, width, height, rng)
+    models = factory.generate_child_models(template_name, width, height, rng)
 
     child_geoms = []
     for group, model in zip(tmpl.geometries, models):
@@ -150,7 +150,7 @@ if __name__ == "__main__":
                             "geometries": [
                                 {
                                     "count": 1,
-                                    "margin": 1,
+                                    #"margin": 1,
                                     "template": "puzzle_1_blob_point"
                                 }
                             ]
@@ -174,8 +174,7 @@ if __name__ == "__main__":
             "geometries": [
                 {
                     "count": 9,
-                    "cols": 3,
-                    "strategy": "flow",
+                    "link": { "cols": { "count": 3 } },
                     "template": "puzzle_2_tile",
                     "tag": "the tile",
                     "row_pattern": [0,1],
@@ -197,8 +196,8 @@ if __name__ == "__main__":
                 {
                     "count": [1, 5],
                     "gap": 1,
-                    "strategy": "flow",
-                    "template": "puzzle_2_mark"
+                    "link": {},
+                    #"template": "puzzle_2_mark"
                 }
             ]
         },

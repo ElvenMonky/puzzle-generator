@@ -72,7 +72,7 @@ class GeometryReference:
     overrides: dict[str, Any] = field(default_factory=dict)
     size: SizeSpec = field(default_factory=dict, init=False, repr=False, compare=False)
 
-    def generate_models(self, width: int, height: int,
+    def generate_child_models(self, width: int, height: int,
                          rng: Optional[random.Random] = None) -> list["ModelRef"]:
         return [g.generate_model(width, height, rng) for g in self.overrides.get("geometries", [])]
 
@@ -256,7 +256,7 @@ class GeometryGroup:
         solver.add(self.bw == width, self.bh == height)
         try:
             if solver.check() != sat:
-                raise ValueError(f"group: unsat for {width}x{height}")
+                raise ValueError(f"group {self.template} {self.count}: unsat for {width}x{height}")
             return solver.model()
         finally:
             solver.pop()
@@ -273,7 +273,7 @@ class GeometryTemplate:
     cut: CutSpec = field(default_factory=dict)
     geometries: list[GeometryGroup] = field(default_factory=list)
 
-    def generate_group_models(self, width: int, height: int,
+    def generate_child_models(self, width: int, height: int,
                          rng: Optional[random.Random] = None) -> list["ModelRef"]:
         return [g.generate_model(width, height, rng) for g in self.geometries]
 
@@ -282,9 +282,9 @@ class CanvasFactory:
     root: str
     templates: dict[str, GeometryTemplate]
 
-    def generate_group_models(self, template: str, width: int, height: int,
+    def generate_child_models(self, template: str, width: int, height: int,
                          rng: Optional[random.Random] = None) -> list["ModelRef"]:
-        return self.templates[template].generate_group_models(width, height, rng)
+        return self.templates[template].generate_child_models(width, height, rng)
 
 
 factory_converter = cattrs.Converter()
