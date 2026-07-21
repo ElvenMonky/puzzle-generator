@@ -5,7 +5,7 @@ from matplotlib.colors import ListedColormap
 
 from typing import Any, Dict, Optional
 from canvas import build_canvas, Geometry, CanvasSpec, GeometrySpec
-from canvas_factory import build_factory, CanvasFactory, GeometryTemplateSpec, CanvasFactorySpec
+from canvas_factory import build_factory, CanvasFactory, GeometryTemplateSpec, CanvasFactorySpec, GeometryReference
 
 def canvas_spec_from_factory(
     factory: CanvasFactory,
@@ -17,6 +17,19 @@ def canvas_spec_from_factory(
     height = size["height"]
     root_geom = _extract_template(factory, factory.root, width, height, {}, rng, 0, 0)
     return {"width": width, "height": height, "geometries": [root_geom]}
+
+def resolve_range_value(rng_spec, rng: random.Random, default=None):
+    """Resolve a RangeSpec (int | list[int]) to a concrete value."""
+    if rng_spec is None:
+        return default
+    if isinstance(rng_spec, list):
+        if len(rng_spec) == 2:
+            return (rng or random).randint(rng_spec[0], rng_spec[1])
+        elif len(rng_spec) == 1:
+            return rng_spec[0]
+        else:
+            return default
+    return rng_spec
 
 def _extract_template(
     factory: CanvasFactory,
@@ -46,18 +59,20 @@ def _extract_template(
             y = model[result["y"][i]].as_long()
             w = model[result["w"][i]].as_long()
             h = model[result["h"][i]].as_long()
-            slot = result["slots"][i]  # GeometryReference
 
-            # Determine effective template for this slot (fallback to group's template)
+            slot_val = model[result["slot"][i]].as_long()
+            if slot_val == -1 or slot_val >= len(group.pool):
+                ref = GeometryReference(template=group.template)
+            else:
+                ref = group.resolve(group.pool[slot_val])
+            slot = ref
+
             slot_tmpl_name = slot.template if slot.template is not None else group.template
             if slot_tmpl_name is None:
-                # No template – skip (should not happen in a well-formed spec)
                 continue
 
-            # Slot overrides (could include 'geometries', color, etc.)
             slot_overrides = slot.overrides.copy()
 
-            # Recursively extract the child template
             child_geom = _extract_template(
                 factory,
                 slot_tmpl_name,
@@ -72,13 +87,11 @@ def _extract_template(
             child_geoms.append(child_geom)
 
     # Build the GeometrySpec for this template's own shape
-    # Apply overrides to template properties
     eff_type = overrides.get("type", tmpl.type)
-    eff_color = overrides.get("color", tmpl.color)
-    eff_edge_color = overrides.get("edge_color", tmpl.edge_color)
-    eff_vertice_color = overrides.get("vertice_color", tmpl.vertice_color)
+    eff_color = resolve_range_value(overrides.get("color", tmpl.color), rng, -1)
+    eff_edge_color = resolve_range_value(overrides.get("edge_color", tmpl.edge_color), rng, None)
+    eff_vertice_color = resolve_range_value(overrides.get("vertice_color", tmpl.vertice_color), rng, None)
 
-    # Create vertices based on type and dimensions
     if eff_type == "Point":
         vertices = [(width // 2, height // 2)]
     elif eff_type == "None":
@@ -89,7 +102,7 @@ def _extract_template(
     geom_spec: GeometrySpec = {
         "x": offset_x,
         "y": offset_y,
-        "dir": 0,  # will be overridden by parent if needed
+        "dir": 0,
         "vertices": vertices,
         "color": eff_color,
         "edge_color": eff_edge_color,
@@ -119,28 +132,17 @@ if __name__ == "__main__":
             "geometries": [
                 {
                     "count": 9,
-                    "cols": { "count": 3 },
+                    "cols": 3,
                     "gap": 1,
                     "strategy": "flow",
-                    "link": {},
                     "template": "puzzle_item",
                     "prefix": [0, 1, 2, 3, 4, 5, 6, 7, 8],
                     "pool": [
-                        {
-                            "template": "puzzle_1"
-                        },
-                        {
-                            "template": "puzzle_2"
-                        },
-                        {
-                            "template": "puzzle_3"
-                        },
-                        {
-                            "template": "puzzle_4"
-                        },
-                        {
-                            "template": "puzzle_5"
-                        }
+                        { "template": "puzzle_1" },
+                        { "template": "puzzle_2" },
+                        { "template": "puzzle_3" },
+                        { "template": "puzzle_4" },
+                        { "template": "puzzle_5" }
                     ]
                 }
             ]
@@ -204,7 +206,7 @@ if __name__ == "__main__":
             "geometries": [
                 {
                     "count": 9,
-                    "cols": { "count": 3 },
+                    "cols": 3,
                     "strategy": "flow",
                     "template": "puzzle_2_tile",
                     "tag": "the tile",

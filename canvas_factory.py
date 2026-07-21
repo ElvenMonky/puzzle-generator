@@ -114,17 +114,6 @@ class GeometryGroup:
             overrides=ref.overrides,
         )
 
-    def pick_slot(self) -> GeometryReference:
-        own_weight = self.weight if self.template is not None else 0
-        total = own_weight + sum((r.weight or 0) for r in self.pool)
-        r = random.uniform(0, total)
-        for ref in self.pool:
-            w = ref.weight or 0
-            if r < w:
-                return self.resolve(ref)
-            r -= w
-        return self.resolve(GeometryReference())
-
     def add_constraints(self, solver, templates: dict[str, "GeometryTemplate"], pw, ph, prefix: str):
         _, max_n, _ = parse_range(self.count)
         cnt = Int(f"{prefix}.cnt")
@@ -136,36 +125,16 @@ class GeometryGroup:
         y = [Int(f"{prefix}[{i}].y") for i in range(max_n)]
         w = [Int(f"{prefix}[{i}].w") for i in range(max_n)]
         h = [Int(f"{prefix}[{i}].h") for i in range(max_n)]
-
-        own_weight = self.weight if self.template is not None else 0
-        viable = own_weight + sum((r.weight or 0) for r in self.pool) > 0
-        if not viable:
-            solver.add(cnt == 0)
-        slots = []
+        slot = [Int(f"{prefix}[{i}].slot") for i in range(max_n)]
         for i in range(max_n):
-            if not viable:
-                slots.append(GeometryReference())
-                continue
-
-            # 1. Use prefix for the first len(prefix) slots
             if self.prefix and i < len(self.prefix):
-                idx = self.prefix[i]
-                if 0 <= idx < len(self.pool):
-                    slots.append(self.resolve(self.pool[idx]))
-                    continue
-                # invalid index → fall back to weighted random
-            # 2. Use pattern for slots after prefix
+                solver.add(slot[i] == self.prefix[i])
             elif self.pattern and (i - len(self.prefix)) >= 0:
-                idx = self.pattern[(i - len(self.prefix)) % len(self.pattern)]
-                if 0 <= idx < len(self.pool):
-                    slots.append(self.resolve(self.pool[idx]))
-                    continue
-                # invalid index → fall back to weighted random
+                solver.add(slot[i] == self.pattern[(i - len(self.prefix)) % len(self.pattern)])
+            else:
+                solver.add(And(slot[i] >= -1, slot[i] < len(self.pool)))
 
-            # 3. Fallback: weighted random choice (group default vs pool items)
-            slots.append(self.pick_slot())
-
-        result = {"cnt": cnt, "x": x, "y": y, "w": w, "h": h, "slots": slots}
+        result = {"cnt": cnt, "x": x, "y": y, "w": w, "h": h, "slot": slot}
 
         link = self.link
         if link is not None:
@@ -189,10 +158,24 @@ class GeometryGroup:
             solver.add(Implies(active, y[i] >= margin))
             solver.add(Implies(active, x[i] + w[i] <= pw - margin))
             solver.add(Implies(active, y[i] + h[i] <= ph - margin))
-            tmpl = templates.get(slots[i].template)
-            size = {**(tmpl.size if tmpl is not None else {}), **slots[i].overrides.get("size", {})}
-            for c in size_constraints(x[i], y[i], w[i], h[i], size, pw, ph):
-                solver.add(Implies(active, c))
+
+            for idx in range(-1, len(self.pool)):
+                tmpl_name = self.template
+                overrides = {}
+                if idx >= 0:
+                    ref = self.resolve(self.pool[idx])
+                    if ref.template is not None:
+                        tmpl_name = ref.template
+                        overrides = ref.overrides.get("size", {})
+
+                base_size = {}
+                if tmpl_name is not None and tmpl_name in templates:
+                    base_size = templates[tmpl_name].size
+                size_spec = {**base_size, **overrides}
+
+                csts = size_constraints(x[i], y[i], w[i], h[i], size_spec, pw, ph)
+                if csts:
+                    solver.add(Implies(And(active, slot[i] == idx), And(csts)))
 
             if link is None:
                 for j in range(i):
@@ -334,7 +317,10 @@ def _structure_group(data: GeometryGroupSpec, _) -> GeometryGroup:
     kwargs["pool"] = [factory_converter.structure(p, GeometryReference) for p in kwargs.get("pool", [])]
     for axis in ("levels", "rows", "cols"):
         if axis in kwargs:
-            kwargs[axis] = factory_converter.structure(kwargs[axis], DimensionData)
+            val = kwargs[axis]
+            if not isinstance(val, dict):
+                val = {"count": val}
+            kwargs[axis] = factory_converter.structure(val, DimensionData)
     if "link" in kwargs:
         kwargs["link"] = factory_converter.structure(kwargs["link"], LinkData)
     return GeometryGroup(**kwargs)
@@ -362,11 +348,9 @@ def _structure_factory(data: CanvasFactorySpec, _) -> CanvasFactory:
         resolved[name] = spec
         return spec
 
-    # Resolve all templates
     for name in spec_map:
         resolve(name)
 
-    # Convert each resolved spec
     for name, merged_spec in resolved.items():
         tmpl = factory_converter.structure(merged_spec, GeometryTemplate)
         tmpl.name = name
