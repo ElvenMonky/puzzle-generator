@@ -5,7 +5,7 @@ from matplotlib.colors import ListedColormap
 
 from typing import Optional
 from canvas import build_canvas, Geometry, CanvasSpec, GeometrySpec
-from canvas_factory import build_factory, CanvasFactory, GeometryTemplateSpec, CanvasFactorySpec, GeometryGroup
+from canvas_factory import build_factory, CanvasFactory, CanvasFactorySpec, CutSpec, GeometryGroup, GeometryReference, GeometryTemplateSpec
 from size_and_range import roll_range
 
 def canvas_spec_from_factory(factory: CanvasFactory, rng: Optional[random.Random] = None) -> CanvasSpec:
@@ -13,10 +13,30 @@ def canvas_spec_from_factory(factory: CanvasFactory, rng: Optional[random.Random
     root_size = factory.templates[factory.root].size
     width = roll_range(root_size.get("width", 1), rng)
     height = roll_range(root_size.get("height", 1), rng)
-    root_geom = _extract_template(factory, factory.root, width, height, rng)
+    root_geom = _extract_template(factory, factory.root, width // 2, height // 2, width, height, rng)
     return {"width": width, "height": height, "geometries": [root_geom]}
 
-def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rng: random.Random) -> list[GeometrySpec]:
+def corner_points(ox: int, oy: int, w: int, h: int, cuts: CutSpec) -> list[tuple[int, int]]:
+    tl, tr, br, bl = cuts["tl"], cuts["tr"], cuts["br"], cuts["bl"]
+    raw = []
+    raw.append((ox + tl, oy))
+    raw.append((ox + w - 1 - tr, oy))
+    if tr: raw.append((ox + w - 1, oy + tr))
+    raw.append((ox + w - 1, oy + h - 1 - br))
+    if br: raw.append((ox + w - 1 - br, oy + h - 1))
+    raw.append((ox + bl, oy + h - 1))
+    if bl: raw.append((ox, oy + h - 1 - bl))
+    if tl: raw.append((ox, oy + tl))
+
+    pts = []
+    for p in raw:
+        if not pts or p != pts[-1]:
+            pts.append(p)
+    if len(pts) > 1 and pts[-1] == pts[0]:
+        pts.pop()
+    return pts
+
+def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, px: int, py: int, rng: random.Random) -> list[GeometrySpec]:
     result = group.result
     items = []
     cnt_val = model[result["cnt"]].as_long()
@@ -27,7 +47,7 @@ def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rn
         h = model[result["h"][i]].as_long()
         slot_val = model[result["slot"][i]].as_long()
 
-        ref = None
+        ref: Optional[GeometryReference] = None
         template_name = group.template
         if 0 <= slot_val < len(group.pool):
             ref = group.pool[slot_val]
@@ -35,9 +55,16 @@ def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rn
         if template_name is None:
             continue
 
-        child = _extract_template(factory, template_name, w, h, rng)
-        child["x"] = x
-        child["y"] = y
+        ox = w // 2
+        oy = h // 2
+        if ref is not None and ref.origin is not None:
+            if ref.origin.x:
+                ox = roll_range(ref.origin.x)
+            if ref.origin.y:
+                oy = roll_range(ref.origin.y)
+        child = _extract_template(factory, template_name, ox, oy, w, h, rng)
+        child["x"] = x + ox - px
+        child["y"] = y + oy - py
         dir_spec = ref.dir if ref is not None and ref.dir is not None else group.dir
         child["dir"] = roll_range(dir_spec, rng)
 
@@ -46,37 +73,36 @@ def _extract_group_items(factory: CanvasFactory, group: GeometryGroup, model, rn
             if extra_groups:
                 extra_models = ref.generate_child_models(w, h, rng)
                 for extra_group, extra_model in zip(extra_groups, extra_models):
-                    child["geometries"].extend(_extract_group_items(factory, extra_group, extra_model, rng))
+                    child["geometries"].extend(_extract_group_items(factory, extra_group, extra_model, ox, oy, rng))
 
         items.append(child)
     return items
 
-def _extract_template(factory: CanvasFactory, template_name: str, width: int, height: int,
+def _extract_template(factory: CanvasFactory, template_name: str, x: int, y: int, width: int, height: int,
                        rng: random.Random) -> GeometrySpec:
     tmpl = factory.templates[template_name]
     models = factory.generate_child_models(template_name, width, height, rng)
 
     child_geoms = []
     for group, model in zip(tmpl.geometries, models):
-        child_geoms.extend(_extract_group_items(factory, group, model, rng))
+        child_geoms.extend(_extract_group_items(factory, group, model, x, y, rng))
 
     color = roll_range(tmpl.color, rng) if tmpl.color is not None else None
     edge_color = roll_range(tmpl.edge_color, rng) if tmpl.edge_color is not None else None
     vertice_color = roll_range(tmpl.vertice_color, rng) if tmpl.vertice_color is not None else None
 
+    vertices = []
     if tmpl.type == "Point":
-        vertices = [(width // 2, height // 2)]
-    elif tmpl.type == "None":
-        vertices = []
-    else:
-        vertices = [(0, 0), (width - 1, 0), (width - 1, height - 1), (0, height - 1)]
+        vertices = [(0, 0)]
+    elif tmpl.type == "Polygon":
+        cut_vals: CutSpec = { "tr": 0, "tl": 0, "br": 0, "bl": 0 }
+        if tmpl.cut is not None:
+            model = tmpl.generate_model(width, height, rng)
+            cut_vals = {k: model[v].as_long() for k, v in tmpl.result.items()}
+        vertices = corner_points(-x, -y, width, height, cut_vals)
 
-    # x/y left at 0 here: this geometry's own position within ITS parent is set by
-    # the caller (_extract_group_items), since Geometry.render() composes offsets
-    # recursively through the parent/child tree — each level only needs its own
-    # local x/y, never an accumulated absolute one.
     return {
-        "x": 0, "y": 0, "dir": 0,
+        "x": x, "y": y, "dir": 0,
         "vertices": vertices,
         "color": color,
         "edge_color": edge_color,
@@ -145,12 +171,14 @@ if __name__ == "__main__":
                     "template": "puzzle_1_blob_piece",
                     "link": {"order": "dfs", "dir": [0, 7]},
                     "prefix": [0],
+                    "pattern": [-1],
                     "pool": [
                         {
+                            "size": {"min": [3, 5], "max": [3, 7]},
                             "geometries": [
                                 {
                                     "count": 1,
-                                    #"margin": 1,
+                                    "margin": 1,
                                     "template": "puzzle_1_blob_point"
                                 }
                             ]
@@ -162,7 +190,7 @@ if __name__ == "__main__":
         "puzzle_1_blob_piece": {
             "type": "Polygon",
             "color": 2,
-            "size": {"min": [3, 5], "max": [3, 7]},
+            "size": {"min": [2, 5], "max": [3, 7]},
         },
         "puzzle_1_blob_point": {
             "type": "Point",
@@ -177,7 +205,7 @@ if __name__ == "__main__":
                     "link": { "cols": { "count": 3 } },
                     "template": "puzzle_2_tile",
                     "tag": "the tile",
-                    "row_pattern": [0,1],
+                    "pattern": [0],
                     "pool": [
                         { "dir": 0 },
                         { "dir": 12 }
@@ -191,18 +219,18 @@ if __name__ == "__main__":
                 "width": 5,
                 "height": 5,
             },
-            "type": "Rectangle",
+            "type": "Polygon",
             "geometries": [
                 {
                     "count": [1, 5],
                     "gap": 1,
                     "link": {},
-                    #"template": "puzzle_2_mark"
+                    "template": "puzzle_2_mark"
                 }
             ]
         },
         "puzzle_2_mark": {
-            "type": "Rectangle",
+            "type": "Polygon",
             "size": {
                 "width": 2,
                 "height": 1,
@@ -266,7 +294,7 @@ if __name__ == "__main__":
         "puzzle_5_item": {
             "color": -1,
             "size": {"min": [5, 7], "max": [5, 9]},
-            "type": "Rectangle",
+            "type": "Polygon",
             "edge_color": 1,
             "vertice_color": 2,
             "cut": {"tl":0, "tr":[3,5], "br":0, "bl":[2,6,2]}
@@ -298,7 +326,8 @@ if __name__ == "__main__":
                 polys.append(g)
         if point_color is not None:
             for p in polys:
-                p.fill_color = point_color
+                p.edge_color = p.color
+                p.color = point_color
         return None
 
     for layer in canvas.layers:

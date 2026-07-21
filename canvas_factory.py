@@ -4,6 +4,7 @@ from typing import Any, Literal, Optional, TypedDict
 import cattrs
 from z3 import Int, And, Or, If, Implies, Solver, sat, ModelRef
 from size_and_range import RangeSpec, SizeSpec, parse_range, range_expr, size_constraints
+from bounded_solver import BoundedSolver
 
 KIND_DCOL = {0: 1, 1: 1, 2: 0, 3: -1, 4: -1, 5: -1, 6: 0, 7: 1}
 KIND_DROW = {0: 0, 1: 1, 2: 1, 3: 1, 4: 0, 5: -1, 6: -1, 7: -1}
@@ -94,7 +95,7 @@ class LinkData:
     above: bool = False
 
 @dataclass
-class GeometryGroup:
+class GeometryGroup(BoundedSolver):
     template: Optional[str] = None
     tag: Optional[str] = None
     dir: RangeSpec = 0
@@ -108,10 +109,6 @@ class GeometryGroup:
     pool: list[GeometryReference] = field(default_factory=list)
 
     size: SizeSpec = field(default_factory=dict, init=False, repr=False, compare=False)
-    solver: Optional[Solver] = field(default=None, init=False, repr=False, compare=False)
-    bw: Any = field(default=None, init=False, repr=False, compare=False)
-    bh: Any = field(default=None, init=False, repr=False, compare=False)
-    result: Optional[dict] = field(default=None, init=False, repr=False, compare=False)
 
     def resolve(self, ref: GeometryReference) -> GeometryReference:
         return GeometryReference(
@@ -121,8 +118,13 @@ class GeometryGroup:
             origin=ref.origin if ref.origin is not None else self.origin,
             overrides=ref.overrides,
         )
+    
+    def get_prefix(self):
+        return f"{id(self)} group of {self.count} {self.template}"
 
-    def add_constraints(self, solver: Solver, pw: int, ph: int, prefix: str):
+    def add_constraints(self):
+        prefix = self.get_prefix()
+        solver = self.solver
         _, max_n, _ = parse_range(self.count)
         cnt = Int(f"{prefix}.cnt")
         solver.add(range_expr(cnt, self.count))
@@ -136,9 +138,13 @@ class GeometryGroup:
         slot = [Int(f"{prefix}[{i}].slot") for i in range(max_n)]
         for i in range(max_n):
             if self.prefix and i < len(self.prefix):
-                solver.add(slot[i] == self.prefix[i])
+                value = self.prefix[i]
+                value = value if value < len(self.pool) else -1
+                solver.add(slot[i] == value)
             elif self.pattern and (i - len(self.prefix)) >= 0:
-                solver.add(slot[i] == self.pattern[(i - len(self.prefix)) % len(self.pattern)])
+                value = self.pattern[(i - len(self.prefix)) % len(self.pattern)]
+                value = value if value < len(self.pool) else -1
+                solver.add(slot[i] == value)
             else:
                 solver.add(And(slot[i] >= -1, slot[i] < len(self.pool)))
 
@@ -164,12 +170,12 @@ class GeometryGroup:
             solver.add(If(active, And(w[i] >= 1, h[i] >= 1), And(x[i] == 0, y[i] == 0, w[i] == 0, h[i] == 0)))
             solver.add(Implies(active, x[i] >= margin))
             solver.add(Implies(active, y[i] >= margin))
-            solver.add(Implies(active, x[i] + w[i] <= pw - margin))
-            solver.add(Implies(active, y[i] + h[i] <= ph - margin))
+            solver.add(Implies(active, x[i] + w[i] <= self.bw - margin))
+            solver.add(Implies(active, y[i] + h[i] <= self.bh - margin))
 
             for idx in range(-1, len(self.pool)):
                 size_spec = self.size if idx == -1 else self.pool[idx].size
-                csts = size_constraints(x[i], y[i], w[i], h[i], size_spec, pw, ph)
+                csts = size_constraints(x[i], y[i], w[i], h[i], size_spec, self.bw, self.bh)
                 if csts:
                     solver.add(Implies(And(active, slot[i] == idx), And(csts)))
 
@@ -238,31 +244,8 @@ class GeometryGroup:
 
         return result
 
-    def init_solver(self) -> "Solver":
-        if self.solver is not None:
-            return self.solver
-        self.bw = Int(f"grp{id(self)}.w")
-        self.bh = Int(f"grp{id(self)}.h")
-        solver = Solver()
-        self.result = self.add_constraints(solver, self.bw, self.bh, f"grp{id(self)}")
-        self.solver = solver
-        return solver
-
-    def generate_model(self, width: int, height: int,
-                        rng: Optional[random.Random] = None) -> "ModelRef":
-        solver = self.init_solver()
-        solver.set("random_seed", (rng or random).randint(0, 2**31 - 1))
-        solver.push()
-        solver.add(self.bw == width, self.bh == height)
-        try:
-            if solver.check() != sat:
-                raise ValueError(f"group {self.template} {self.count}: unsat for {width}x{height}")
-            return solver.model()
-        finally:
-            solver.pop()
-
 @dataclass
-class GeometryTemplate:
+class GeometryTemplate(BoundedSolver):
     name: str
     type: TypeSpec = "None"
     size: SizeSpec = field(default_factory=dict)
@@ -270,12 +253,34 @@ class GeometryTemplate:
     edge_color: Optional[RangeSpec] = None
     vertice_color: Optional[RangeSpec] = None
     fill_color: Optional[RangeSpec] = None
-    cut: CutSpec = field(default_factory=dict)
+    cut: Optional[CutSpec] = None
     geometries: list[GeometryGroup] = field(default_factory=list)
 
     def generate_child_models(self, width: int, height: int,
                          rng: Optional[random.Random] = None) -> list["ModelRef"]:
         return [g.generate_model(width, height, rng) for g in self.geometries]
+    
+    def get_prefix(self) -> str:
+        return f"tmpl_{self.name}_{id(self)}"
+
+    def add_constraints(self) -> dict:
+        if not self.cut:
+            return {}
+        solver = self.solver
+        cuts = {}
+        for corner in ("tl", "tr", "br", "bl"):
+            v = Int(f"{self.get_prefix()}_cut_{corner}")
+            cuts[corner] = v
+            spec = self.cut.get(corner, 0)
+            solver.add(range_expr(v, spec))
+            solver.add(v >= 0)
+
+        solver.add(cuts["tl"] + cuts["tr"] <= self.bw - 1)
+        solver.add(cuts["bl"] + cuts["br"] <= self.bw - 1)
+        solver.add(cuts["tl"] + cuts["bl"] <= self.bh - 1)
+        solver.add(cuts["tr"] + cuts["br"] <= self.bh - 1)
+
+        return cuts
 
 @dataclass
 class CanvasFactory:
@@ -327,7 +332,8 @@ def _cache_sizes(templates: dict[str, GeometryTemplate], groups: list[GeometryGr
         tmpl = templates.get(group.template)
         group.size = tmpl.size if tmpl is not None else {}
         for ref in group.pool:
-            rtmpl = templates.get(ref.template)
+            resolved_template = ref.template if ref.template is not None else group.template
+            rtmpl = templates.get(resolved_template) if resolved_template else None
             ref.size = {**(rtmpl.size if rtmpl is not None else {}), **ref.overrides.get("size", {})}
             if "geometries" in ref.overrides:
                 _cache_sizes(templates, ref.overrides["geometries"])
