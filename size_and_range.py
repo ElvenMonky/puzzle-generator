@@ -1,5 +1,5 @@
 import random
-from typing import TypedDict, Union
+from typing import Optional, TypedDict, Union
 from z3 import And, If
 
 RangeSpec = Union[int, list[int]]
@@ -24,7 +24,7 @@ def parse_range(spec: RangeSpec) -> tuple[int, int, int]:
         0, 0, 1
     return int(spec[0]), int(spec[1 if l > 1 else 0]), int(spec[2]) if l > 2 else 1
 
-def roll_range(spec: RangeSpec, rng: random.Random = None) -> int:
+def roll_range(spec: RangeSpec, rng: Optional[random.Random] = None) -> int:
     if isinstance(spec, int):
         return int(spec)
     lo, hi, step = parse_range(spec)

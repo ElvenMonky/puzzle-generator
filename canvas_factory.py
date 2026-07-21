@@ -70,6 +70,11 @@ class GeometryReference:
     dir: Optional[RangeSpec] = None
     origin: Optional[OriginSpec] = None
     overrides: dict[str, Any] = field(default_factory=dict)
+    size: SizeSpec = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def generate_models(self, width: int, height: int,
+                         rng: Optional[random.Random] = None) -> list["ModelRef"]:
+        return [g.generate_model(width, height, rng) for g in self.overrides.get("geometries", [])]
 
 @dataclass
 class DimensionData:
@@ -102,6 +107,12 @@ class GeometryGroup:
     link: Optional[LinkData] = None
     pool: list[GeometryReference] = field(default_factory=list)
 
+    size: SizeSpec = field(default_factory=dict, init=False, repr=False, compare=False)
+    solver: Optional[Solver] = field(default=None, init=False, repr=False, compare=False)
+    bw: Any = field(default=None, init=False, repr=False, compare=False)
+    bh: Any = field(default=None, init=False, repr=False, compare=False)
+    result: Optional[dict] = field(default=None, init=False, repr=False, compare=False)
+
     def resolve(self, ref: GeometryReference) -> GeometryReference:
         return GeometryReference(
             template=ref.template if ref.template is not None else self.template,
@@ -111,7 +122,7 @@ class GeometryGroup:
             overrides=ref.overrides,
         )
 
-    def add_constraints(self, solver, templates: dict[str, "GeometryTemplate"], pw, ph, prefix: str):
+    def add_constraints(self, solver: Solver, pw: int, ph: int, prefix: str):
         _, max_n, _ = parse_range(self.count)
         cnt = Int(f"{prefix}.cnt")
         solver.add(range_expr(cnt, self.count))
@@ -157,19 +168,7 @@ class GeometryGroup:
             solver.add(Implies(active, y[i] + h[i] <= ph - margin))
 
             for idx in range(-1, len(self.pool)):
-                tmpl_name = self.template
-                overrides = {}
-                if idx >= 0:
-                    ref = self.resolve(self.pool[idx])
-                    if ref.template is not None:
-                        tmpl_name = ref.template
-                        overrides = ref.overrides.get("size", {})
-
-                base_size = {}
-                if tmpl_name is not None and tmpl_name in templates:
-                    base_size = templates[tmpl_name].size
-                size_spec = {**base_size, **overrides}
-
+                size_spec = self.size if idx == -1 else self.pool[idx].size
                 csts = size_constraints(x[i], y[i], w[i], h[i], size_spec, pw, ph)
                 if csts:
                     solver.add(Implies(And(active, slot[i] == idx), And(csts)))
@@ -239,6 +238,29 @@ class GeometryGroup:
 
         return result
 
+    def init_solver(self) -> "Solver":
+        if self.solver is not None:
+            return self.solver
+        self.bw = Int(f"grp{id(self)}.w")
+        self.bh = Int(f"grp{id(self)}.h")
+        solver = Solver()
+        self.result = self.add_constraints(solver, self.bw, self.bh, f"grp{id(self)}")
+        self.solver = solver
+        return solver
+
+    def generate_model(self, width: int, height: int,
+                        rng: Optional[random.Random] = None) -> "ModelRef":
+        solver = self.init_solver()
+        solver.set("random_seed", (rng or random).randint(0, 2**31 - 1))
+        solver.push()
+        solver.add(self.bw == width, self.bh == height)
+        try:
+            if solver.check() != sat:
+                raise ValueError(f"group: unsat for {width}x{height}")
+            return solver.model()
+        finally:
+            solver.pop()
+
 @dataclass
 class GeometryTemplate:
     name: str
@@ -251,45 +273,18 @@ class GeometryTemplate:
     cut: CutSpec = field(default_factory=dict)
     geometries: list[GeometryGroup] = field(default_factory=list)
 
-    solver: Optional["Solver"] = field(default=None, init=False, repr=False, compare=False)
-    bw: Any = field(default=None, init=False, repr=False, compare=False)
-    bh: Any = field(default=None, init=False, repr=False, compare=False)
-    group_results: list = field(default=None, init=False, repr=False, compare=False)
-
-    def init_solver(self, templates: dict[str, "GeometryTemplate"]) -> Solver:
-        if self.solver is not None:
-            return self.solver
-        self.bw = Int(f"{self.name}.w")
-        self.bh = Int(f"{self.name}.h")
-        solver = Solver()
-        self.group_results = [
-            group.add_constraints(solver, templates, self.bw, self.bh, f"{self.name}.g{i}")
-            for i, group in enumerate(self.geometries)
-        ]
-        self.solver = solver
-        return solver
-
-    def generate_model(self, templates: dict[str, "GeometryTemplate"], width: int, height: int,
-                        rng: Optional[random.Random] = None) -> ModelRef:
-        solver = self.init_solver(templates)
-        solver.set("random_seed", (rng or random).randint(0, 2**31 - 1))
-        solver.push()
-        solver.add(self.bw == width, self.bh == height)
-        try:
-            if solver.check() != sat:
-                raise ValueError(f"{self.name}: unsat for {width}x{height}")
-            return solver.model()
-        finally:
-            solver.pop()
+    def generate_group_models(self, width: int, height: int,
+                         rng: Optional[random.Random] = None) -> list["ModelRef"]:
+        return [g.generate_model(width, height, rng) for g in self.geometries]
 
 @dataclass
 class CanvasFactory:
     root: str
     templates: dict[str, GeometryTemplate]
 
-    def generate_model(self, template: str, width: int, height: int,
-                       rng: Optional[random.Random] = None) -> ModelRef:
-        return self.templates[template].generate_model(self.templates, width, height, rng)
+    def generate_group_models(self, template: str, width: int, height: int,
+                         rng: Optional[random.Random] = None) -> list["ModelRef"]:
+        return self.templates[template].generate_group_models(width, height, rng)
 
 
 factory_converter = cattrs.Converter()
@@ -302,7 +297,6 @@ def _structure_reference(data: GeometryReferenceSpec, _) -> GeometryReference:
     return GeometryReference(
         template=data.get("template"),
         tag=data.get("tag"),
-        weight=data.get("weight"),
         dir=data.get("dir"),
         origin=data.get("origin"),
         overrides=overrides,
@@ -328,6 +322,16 @@ def _structure_template(data: GeometryTemplateSpec, _) -> GeometryTemplate:
     kwargs["geometries"] = [factory_converter.structure(g, GeometryGroup) for g in kwargs.get("geometries", [])]
     return GeometryTemplate(name="", **kwargs)
 
+def _cache_sizes(templates: dict[str, GeometryTemplate], groups: list[GeometryGroup]):
+    for group in groups:
+        tmpl = templates.get(group.template)
+        group.size = tmpl.size if tmpl is not None else {}
+        for ref in group.pool:
+            rtmpl = templates.get(ref.template)
+            ref.size = {**(rtmpl.size if rtmpl is not None else {}), **ref.overrides.get("size", {})}
+            if "geometries" in ref.overrides:
+                _cache_sizes(templates, ref.overrides["geometries"])
+
 def _structure_factory(data: CanvasFactorySpec, _) -> CanvasFactory:
     templates = {}
     spec_map = data["templates"]
@@ -352,6 +356,9 @@ def _structure_factory(data: CanvasFactorySpec, _) -> CanvasFactory:
         tmpl = factory_converter.structure(merged_spec, GeometryTemplate)
         tmpl.name = name
         templates[name] = tmpl
+
+    for tmpl in templates.values():
+        _cache_sizes(templates, tmpl.geometries)
 
     return CanvasFactory(root=data["root"], templates=templates)
 
