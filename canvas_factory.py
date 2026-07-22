@@ -178,6 +178,17 @@ class GeometryGroup(BoundedSolver):
             col_gap = Int(f"{prefix}.cols.gap")
             solver.add(range_expr(col_gap, grid.cols.gap if cols_gap_set else 0))
 
+            dim_count_vars = {}
+            for dim_name, var_list in (("rows", row), ("cols", col), ("levels", level)):
+                dim_data = getattr(grid, dim_name)
+                if dim_data is not None and dim_data.count is not None:
+                    count_var = Int(f"{prefix}.{dim_name}.count")
+                    solver.add(range_expr(count_var, dim_data.count))
+                    dim_count_vars[dim_name] = count_var
+                    solver.add(Or(cnt == 0, *[
+                        And(i < cnt, var_list[i] == count_var - 1) for i in range(max_n)
+                    ]))
+
         for i in range(max_n):
             active = i < cnt
             solver.add(If(active, And(w[i] >= 1, h[i] >= 1), And(x[i] == 0, y[i] == 0, w[i] == 0, h[i] == 0)))
@@ -220,9 +231,8 @@ class GeometryGroup(BoundedSolver):
 
                 for dim_name, var_list in [("rows", row), ("cols", col), ("levels", level)]:
                     dim_data = getattr(grid, dim_name)
-                    if dim_data is not None:
-                        _, hi, _ = parse_range(dim_data.count or [0, 7])
-                        solver.add(Implies(active, var_list[i] < hi))
+                    if dim_name in dim_count_vars:
+                        solver.add(Implies(active, var_list[i] < dim_count_vars[dim_name]))
 
                 for j in range(i):
                     is_parent = parent[i] == j
