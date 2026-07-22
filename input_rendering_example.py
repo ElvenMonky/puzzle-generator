@@ -125,8 +125,8 @@ if __name__ == "__main__":
                         "pool": [
                             { "dir": 0 },
                             { "dir": 12 },
-                            { "size": { "width": 4 } },
-                            { "size": { "height": 4 } },
+                            { "size": { "width": 4 }, "color": 8 },
+                            { "size": { "height": 4 }, "color": 7 },
                         ]
                     }
                 ]

@@ -189,6 +189,24 @@ class GeometryGroup(BoundedSolver):
                         And(i < cnt, var_list[i] == count_var - 1) for i in range(max_n)
                     ]))
 
+        col_pattern = grid.cols.pattern if (grid is not None and grid.cols is not None) else []
+        row_pattern = grid.rows.pattern if (grid is not None and grid.rows is not None) else []
+        pool_size_overrides = [ref.overrides.get("size", {}) for ref in self.pool]
+
+        def axis_options(pattern, var):
+            # every position picks -1..len(pool)-1 from `pattern` (cycled); the referenced
+            # pool entry's own explicit size override (only the keys it set) then layers on
+            # top of the item's regular size spec for positions matching that value of `var`.
+            if not pattern:
+                return [(True, {})]
+            plen = len(pattern)
+            opts = []
+            for v in range(max_n):
+                target = pattern[v % plen]
+                override = pool_size_overrides[target] if 0 <= target < len(self.pool) else {}
+                opts.append((var == v, override))
+            return opts
+
         for i in range(max_n):
             active = i < cnt
             solver.add(If(active, And(w[i] >= 1, h[i] >= 1), And(x[i] == 0, y[i] == 0, w[i] == 0, h[i] == 0)))
@@ -197,11 +215,18 @@ class GeometryGroup(BoundedSolver):
             solver.add(Implies(active, x[i] + w[i] <= self.bw - margin))
             solver.add(Implies(active, y[i] + h[i] <= self.bh - margin))
 
+            col_opts = axis_options(col_pattern, col[i]) if grid is not None else [(True, {})]
+            row_opts = axis_options(row_pattern, row[i]) if grid is not None else [(True, {})]
+
             for idx in range(-1, len(self.pool)):
-                size_spec = self.size if idx == -1 else self.pool[idx].size
-                csts = size_constraints(x[i], y[i], w[i], h[i], size_spec, self.bw, self.bh)
-                if csts:
-                    solver.add(Implies(And(active, slot[i] == idx), And(csts)))
+                base_spec = self.size if idx == -1 else self.pool[idx].size
+                for col_cond, col_override in col_opts:
+                    for row_cond, row_override in row_opts:
+                        merged = base_spec if not (col_override or row_override) else \
+                            {**base_spec, **col_override, **row_override}
+                        csts = size_constraints(x[i], y[i], w[i], h[i], merged, self.bw, self.bh)
+                        if csts:
+                            solver.add(Implies(And(active, slot[i] == idx, col_cond, row_cond), And(csts)))
 
             if grid is None:
                 for j in range(i):

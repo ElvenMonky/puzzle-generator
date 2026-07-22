@@ -29,6 +29,11 @@ def build_group(factory: CanvasFactory, group: GeometryGroup, model, px: int, py
     result = group.result
     items = []
     cnt_val = model[result["cnt"]].as_long()
+    grid = group.grid
+    col_pattern = grid.cols.pattern if grid is not None and grid.cols is not None else []
+    row_pattern = grid.rows.pattern if grid is not None and grid.rows is not None else []
+    color_keys = ("color", "edge_color", "vertice_color")
+
     for i in range(cnt_val):
         x = model[result["x"][i]].as_long()
         y = model[result["y"][i]].as_long()
@@ -44,6 +49,20 @@ def build_group(factory: CanvasFactory, group: GeometryGroup, model, px: int, py
         if template_name is None:
             continue
 
+        overrides = dict(ref.overrides) if ref is not None else {}
+        if grid is not None:
+            col_val = model[result["col"][i]].as_long()
+            row_val = model[result["row"][i]].as_long()
+            for pattern, val in ((col_pattern, col_val), (row_pattern, row_val)):
+                if not pattern:
+                    continue
+                target = pattern[val % len(pattern)]
+                if 0 <= target < len(group.pool):
+                    target_overrides = group.pool[target].overrides
+                    for key in color_keys:
+                        if key in target_overrides:
+                            overrides[key] = target_overrides[key]
+
         ox = w // 2
         oy = h // 2
         if ref is not None and ref.origin is not None:
@@ -51,8 +70,7 @@ def build_group(factory: CanvasFactory, group: GeometryGroup, model, px: int, py
                 ox = roll_range(ref.origin.x)
             if ref.origin.y:
                 oy = roll_range(ref.origin.y)
-        child = build_template_instance(factory, template_name, ox, oy, w, h, rng,
-                                         overrides=ref.overrides if ref is not None else None)
+        child = build_template_instance(factory, template_name, ox, oy, w, h, rng, overrides=overrides)
         child["x"] = x + ox - px
         child["y"] = y + oy - py
         dir_spec = ref.dir if ref is not None and ref.dir is not None else group.dir
