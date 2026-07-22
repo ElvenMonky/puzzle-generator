@@ -27,8 +27,8 @@ if __name__ == "__main__":
                         "gap": 1,
                         "template": "puzzle_item",
                         "grid": {
-                            "cols": { "count": 3 },
-                            "rows": { "count": 3 },
+                            "cols": { "count": 3, "gap": 1 },
+                            "rows": { "count": 3, "gap": 1 },
                             "cell_alignment": {
                                 "top": True,
                                 "bottom": True,

@@ -25,6 +25,7 @@ class OriginSpec(TypedDict, total=False):
 
 class DimensionSpec(TypedDict, total=False):
     count: RangeSpec
+    gap: RangeSpec
     prefix: list[int]
     pattern: list[int]
 
@@ -62,7 +63,6 @@ class GeometryReferenceSpec(GeometryTemplateSpec, total=False):
     origin: OriginSpec
 
 class GeometryGroupSpec(DimensionSpec, GeometryReferenceSpec, total=False):
-    gap: RangeSpec
     margin: RangeSpec
     grid: GridSpec
     pool: list[GeometryReferenceSpec]
@@ -86,9 +86,10 @@ class GeometryReference:
 
 @dataclass
 class DimensionData:
-    count: RangeSpec = 1
+    count: RangeSpec = 32
     prefix: list[int] = field(default_factory=list)
     pattern: list[int] = field(default_factory=list)
+    gap: Optional[RangeSpec] = None
 
 @dataclass
 class GridData:
@@ -173,6 +174,13 @@ class GeometryGroup(BoundedSolver):
             for i in range(max_n):
                 solver.add(row[i] < max_n, col[i] < max_n, level[i] < max_n)
 
+            rows_gap_set = grid.rows is not None and grid.rows.gap is not None
+            cols_gap_set = grid.cols is not None and grid.cols.gap is not None
+            row_gap = Int(f"{prefix}.rows.gap")
+            solver.add(range_expr(row_gap, grid.rows.gap if rows_gap_set else 0))
+            col_gap = Int(f"{prefix}.cols.gap")
+            solver.add(range_expr(col_gap, grid.cols.gap if cols_gap_set else 0))
+
         for i in range(max_n):
             active = i < cnt
             solver.add(If(active, And(w[i] >= 1, h[i] >= 1), And(x[i] == 0, y[i] == 0, w[i] == 0, h[i] == 0)))
@@ -236,15 +244,23 @@ class GeometryGroup(BoundedSolver):
                         col[i] > col[j], x[i] >= x[j] + w[j] + gap, x[j] >= x[i] + w[i] + gap)))
                     solver.add(Implies(And(active, same_row),
                         And(y[i] <= y[j] + h[j] - 1, y[j] <= y[i] + h[i] - 1)))
-                    solver.add(Implies(And(active, row[i] != row[j]), If(
-                        row[i] > row[j], y[i] >= y[j] + 1 + gap, y[j] >= y[i] + 1 + gap)))
+                    if rows_gap_set:
+                        solver.add(Implies(And(active, row[i] != row[j]), If(
+                            row[i] > row[j], y[i] >= y[j] + h[j] + row_gap, y[j] >= y[i] + h[i] + row_gap)))
+                    else:
+                        solver.add(Implies(And(active, row[i] != row[j]), If(
+                            row[i] > row[j], y[i] >= y[j] + 1 + gap, y[j] >= y[i] + 1 + gap)))
 
                     solver.add(Implies(And(active, same_col), If(
                         row[i] > row[j], y[i] >= y[j] + h[j] + gap, y[j] >= y[i] + h[i] + gap)))
                     solver.add(Implies(And(active, same_col),
                         And(x[i] <= x[j] + w[j] - 1, x[j] <= x[i] + w[i] - 1)))
-                    solver.add(Implies(And(active, col[i] != col[j]), If(
-                        col[i] > col[j], x[i] >= x[j] + 1 + gap, x[j] >= x[i] + 1 + gap)))
+                    if cols_gap_set:
+                        solver.add(Implies(And(active, col[i] != col[j]), If(
+                            col[i] > col[j], x[i] >= x[j] + w[j] + col_gap, x[j] >= x[i] + w[i] + col_gap)))
+                    else:
+                        solver.add(Implies(And(active, col[i] != col[j]), If(
+                            col[i] > col[j], x[i] >= x[j] + 1 + gap, x[j] >= x[i] + 1 + gap)))
 
                     full_x_ij = x[i] >= x[j] + w[j] + gap
                     full_x_ji = x[j] >= x[i] + w[i] + gap
