@@ -20,7 +20,7 @@ if __name__ == "__main__":
             "macro_puzzles_grid": {
                 "type": "Polygon",
                 "color": 5,
-                "size": {"width": 47, "height": 47},
+                "size": {"width": 45, "height": 45},
                 "geometries": [
                     {
                         "count": 9,
@@ -29,8 +29,8 @@ if __name__ == "__main__":
                         "grid": {
                             "dir": [0, 2, 2],
                             "primary_dir": 2,
-                            "cols": { "count": 3, "gap": 1 },
-                            "rows": { "count": 3, "gap": 1 },
+                            "cols": { "count": 4, "gap": 1 },
+                            "rows": { "count": 4, "gap": 1 },
                             "cell_alignment": {
                                 "top": True,
                                 "bottom": True,
@@ -52,7 +52,7 @@ if __name__ == "__main__":
             "puzzle_item": {
                 "type": "Polygon",
                 "color": 0,
-                "size": {"width": [13, 15], "height": [13, 15] },
+                "size": {"width": [9, 11], "height": [9, 11] },
             },
             "puzzle_1": {
                 "template": "puzzle_item",
@@ -120,14 +120,13 @@ if __name__ == "__main__":
             "puzzle_2_tile": {
                 "color": 9,
                 "size": {
-                    "width": 4,
-                    "height": 4,
+                    "width": 3,
+                    "height": 3,
                 },
                 "type": "Polygon",
                 "geometries": [
                     {
-                        "count": [1, 5],
-                        "gap": 1,
+                        "count": [1, 8],
                         "grid": {},
                         "template": "puzzle_2_mark"
                     }
@@ -136,16 +135,17 @@ if __name__ == "__main__":
             "puzzle_2_mark": {
                 "type": "Polygon",
                 "size": {
-                    "width": 2,
+                    "width": 1,
                     "height": 1,
                 },
                 "color": 3
             },
             "puzzle_3": {
                 "template": "puzzle_item",
+                "size": {"width": 11, "height": 11 },
                 "geometries": [
                     {
-                        "count": [4, 9],
+                        "count": 9,
                         "gap": 1,
                         "margin": 1,
                         "pool": [{"template": "puzzle_3_root"}],
@@ -164,18 +164,16 @@ if __name__ == "__main__":
             "puzzle_3_node": {
                 "type": "Polygon",
                 "color": 9,
-                "size": {"width": 3, "height": 3},
+                "size": {"width": 2, "height": 2},
             },
             "puzzle_4": {
                 "template": "puzzle_item",
                 "geometries": [
                     {
-                        "count": [10, 20],
+                        "count": [20, 40],
                         "margin": 1,
                         "gap": 0,
                         "template": "puzzle_4_point",
-                        "grid": {},
-                        "pool": [{"template": "puzzle_4_point"}],
                     }
                 ],
             },
@@ -197,11 +195,11 @@ if __name__ == "__main__":
             },
             "puzzle_5_item": {
                 "color": -1,
-                "size": {"min": [5, 7], "max": [5, 9]},
+                "size": {"min": [4, 7], "max": [4, 9]},
                 "type": "Polygon",
                 "edge_color": 1,
                 "vertice_color": 2,
-                "cut": {"tl":0, "tr":[3,5], "br":0, "bl":[2,6,2]}
+                "cut": {"tl":0, "tr":[1,5], "br":0, "bl":[2,6,2]}
             }
         },
     }
