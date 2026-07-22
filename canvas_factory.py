@@ -402,8 +402,8 @@ def _structure_factory(data: CanvasFactorySpec, _) -> CanvasFactory:
 
     return CanvasFactory(root=data["root"], templates=templates)
 
-factory_converter.register_structure_hook(int | list[int], lambda v, t: v)
-factory_converter.register_structure_hook(int | list[int] | None, lambda v, t: v)
+factory_converter.register_structure_hook(RangeSpec, lambda v, t: v)
+factory_converter.register_structure_hook(Optional[RangeSpec], lambda v, t: v)
 factory_converter.register_structure_hook(GeometryReference, _structure_reference)
 factory_converter.register_structure_hook(GeometryGroup, _structure_group)
 factory_converter.register_structure_hook(GeometryTemplate, _structure_template)
