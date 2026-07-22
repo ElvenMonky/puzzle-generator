@@ -126,7 +126,7 @@ class Canvas:
                     grid[wy, wx] = c
         return grid
 
-converter = cattrs.Converter()
+converter = cattrs.Converter(forbid_extra_keys=True)
 
 def _structure_geometry(data: GeometrySpec, _) -> Geometry:
     fields = set(Geometry.__dataclass_fields__)

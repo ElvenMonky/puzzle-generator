@@ -27,6 +27,8 @@ if __name__ == "__main__":
                         "gap": 1,
                         "template": "puzzle_item",
                         "grid": {
+                            "dir": [0, 2, 2],
+                            "primary_dir": 2,
                             "cols": { "count": 3, "gap": 1 },
                             "rows": { "count": 3, "gap": 1 },
                             "cell_alignment": {

@@ -37,7 +37,7 @@ class AlignmentSpec(TypedDict, total=False):
 class GridSpec(TypedDict, total=False):
     cell_alignment: AlignmentSpec
     dir: RangeSpec
-    root_dir: RangeSpec
+    primary_dir: int
     levels: DimensionSpec
     rows: DimensionSpec
     cols: DimensionSpec
@@ -84,15 +84,15 @@ class GeometryReference:
 
 @dataclass
 class DimensionData:
-    count: RangeSpec = 32
+    count: Optional[RangeSpec] = None
     gap: Optional[RangeSpec] = None
     prefix: list[int] = field(default_factory=list)
     pattern: list[int] = field(default_factory=list)
 
 @dataclass
 class GridData:
-    dir: RangeSpec = 0
-    primary_dir: int = 0
+    dir: Optional[RangeSpec] = None
+    primary_dir: Optional[int] = None
     levels: Optional[DimensionData] = None
     rows: Optional[DimensionData] = None
     cols: Optional[DimensionData] = None
@@ -204,15 +204,24 @@ class GeometryGroup(BoundedSolver):
                     And(row[i] >= 0, col[i] >= 0, level[i] >= 0),
                     And(row[i] == 0, col[i] == 0, level[i] == 0)))
                 if i > 0:
+                    if grid.primary_dir is not None:
+                        dr = KIND_DROW[grid.primary_dir]
+                        dc = KIND_DCOL[grid.primary_dir]
+                        val_i = row[i] * dr + col[i] * dc
+                        val_prev = row[i-1] * dr + col[i-1] * dc
+                        solver.add(Implies(active, val_i >= val_prev))
+                    lo_dir, hi_dir, step_dir = parse_range(grid.dir or [0, 7])
                     solver.add(If(active,
-                        And(kind[i] >= 0, kind[i] <= 7, parent[i] >= 0, parent[i] < i),
+                        And(kind[i] >= lo_dir, kind[i] <= hi_dir, (kind[i] - lo_dir) % step_dir == 0, parent[i] >= 0, parent[i] < i),
                         And(kind[i] == -1, parent[i] == -1)))
+                    if step_dir > 1:
+                        solver.add(Implies(active, (kind[i] - lo_dir) % step_dir == 0))
                 solver.add(Implies(i < cnt, And([Or(row[i] != row[j], col[i] != col[j]) for j in range(i)])))
 
                 for dim_name, var_list in [("rows", row), ("cols", col), ("levels", level)]:
                     dim_data = getattr(grid, dim_name)
                     if dim_data is not None:
-                        _, hi, _ = parse_range(dim_data.count)
+                        _, hi, _ = parse_range(dim_data.count or [0, 7])
                         solver.add(Implies(active, var_list[i] < hi))
 
                 for j in range(i):
@@ -323,7 +332,7 @@ class CanvasFactory:
         return self.templates[template].generate_child_models(width, height, rng)
 
 
-factory_converter = cattrs.Converter()
+factory_converter = cattrs.Converter(forbid_extra_keys=True)
 
 def _structure_reference(data: GeometryReferenceSpec, _) -> GeometryReference:
     known = {"template", "tag", "weight", "dir", "origin"}
