@@ -140,8 +140,12 @@ if __name__ == "__main__":
                 "type": "Polygon",
                 "geometries": [
                     {
-                        "count": [1, 8],
-                        "grid": {},
+                        "count": [1, 5],
+                        "grid": {
+                            "primary_dir": 2,
+                            "cols": { "count": 3, "gap": 0 },
+                            "rows": { "count": 2, "gap": 0 },
+                        },
                         "template": "puzzle_2_mark"
                     }
                 ]
@@ -166,7 +170,6 @@ if __name__ == "__main__":
                         "pattern": [1],
                         "template": "puzzle_3_node",
                         "grid": {},
-                        
                     }
                 ],
             },
@@ -222,12 +225,6 @@ if __name__ == "__main__":
                             "primary_dir": 2,
                             "cols": { "count": 2, "gap": 0 },
                             "rows": { "count": 2, "gap": 0 },
-                            "cell_alignment": {
-                                "top": True,
-                                "bottom": True,
-                                "left": True,
-                                "right": True,
-                            }
                         },
                         "template": "puzzle_6_block",
                     },
