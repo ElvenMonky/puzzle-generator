@@ -51,7 +51,8 @@ def build_group(factory: CanvasFactory, group: GeometryGroup, model, px: int, py
                 ox = roll_range(ref.origin.x)
             if ref.origin.y:
                 oy = roll_range(ref.origin.y)
-        child = build_template_instance(factory, template_name, ox, oy, w, h, rng)
+        child = build_template_instance(factory, template_name, ox, oy, w, h, rng,
+                                         overrides=ref.overrides if ref is not None else None)
         child["x"] = x + ox - px
         child["y"] = y + oy - py
         dir_spec = ref.dir if ref is not None and ref.dir is not None else group.dir
@@ -66,17 +67,22 @@ def build_group(factory: CanvasFactory, group: GeometryGroup, model, px: int, py
     return items
 
 def build_template_instance(factory: CanvasFactory, template_name: str, x: int, y: int, width: int, height: int,
-                       rng: random.Random) -> GeometrySpec:
+                       rng: random.Random, overrides: Optional[dict] = None) -> GeometrySpec:
     tmpl = factory.templates[template_name]
+    overrides = overrides or {}
 
     geometries = []
     for group in tmpl.geometries:
         model = group.generate_model(width, height, rng)
         geometries.extend(build_group(factory, group, model, x, y, rng))
 
-    color = roll_range(tmpl.color, rng) if tmpl.color is not None else None
-    edge_color = roll_range(tmpl.edge_color, rng) if tmpl.edge_color is not None else None
-    vertice_color = roll_range(tmpl.vertice_color, rng) if tmpl.vertice_color is not None else None
+    color_spec = overrides.get("color", tmpl.color)
+    edge_color_spec = overrides.get("edge_color", tmpl.edge_color)
+    vertice_color_spec = overrides.get("vertice_color", tmpl.vertice_color)
+
+    color = roll_range(color_spec, rng) if color_spec is not None else None
+    edge_color = roll_range(edge_color_spec, rng) if edge_color_spec is not None else None
+    vertice_color = roll_range(vertice_color_spec, rng) if vertice_color_spec is not None else None
 
     vertices = []
     if tmpl.type == "Point":

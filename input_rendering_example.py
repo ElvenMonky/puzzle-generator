@@ -20,10 +20,10 @@ if __name__ == "__main__":
             "macro_puzzles_grid": {
                 "type": "Polygon",
                 "color": 5,
-                "size": {"width": 45, "height": 45},
+                "size": {"width": 43, "height": 43},
                 "geometries": [
                     {
-                        "count": 9,
+                        "count": 16,
                         "gap": 1,
                         "template": "puzzle_item",
                         "grid": {
@@ -39,12 +39,15 @@ if __name__ == "__main__":
                             }
                         },
                         "prefix": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+                        "pattern": [-1],
                         "pool": [
                             {"template": "puzzle_1"},
                             {"template": "puzzle_2"},
                             {"template": "puzzle_3"},
-                            {"template": "puzzle_4"},
                             {"template": "puzzle_5"},
+                            {"template": "puzzle_4"},
+                            {"template": "puzzle_6"},
+                            {"template": "puzzle_7"},
                         ],
                     }
                 ],
@@ -52,7 +55,7 @@ if __name__ == "__main__":
             "puzzle_item": {
                 "type": "Polygon",
                 "color": 0,
-                "size": {"width": [9, 11], "height": [9, 11] },
+                "size": {"width": 10, "height": 10 },
             },
             "puzzle_1": {
                 "template": "puzzle_item",
@@ -106,13 +109,24 @@ if __name__ == "__main__":
                 "geometries": [
                     {
                         "count": 9,
-                        "grid": { "cols": { "count": 3 } },
+                        "grid": {
+                            "cols": {
+                                "count": 3,
+                                "pattern": [-1, 2],
+                            },
+                            "rows": {
+                                "count": 3,
+                                "pattern": [-1, 3],
+                            },
+                        },
                         "template": "puzzle_2_tile",
                         "tag": "the tile",
                         "pattern": [0],
                         "pool": [
                             { "dir": 0 },
-                            { "dir": 12 }
+                            { "dir": 12 },
+                            { "size": { "width": 4 } },
+                            { "size": { "height": 4 } },
                         ]
                     }
                 ]
@@ -142,7 +156,6 @@ if __name__ == "__main__":
             },
             "puzzle_3": {
                 "template": "puzzle_item",
-                "size": {"width": 11, "height": 11 },
                 "geometries": [
                     {
                         "count": 9,
@@ -170,16 +183,14 @@ if __name__ == "__main__":
                 "template": "puzzle_item",
                 "geometries": [
                     {
-                        "count": [20, 40],
-                        "margin": 1,
-                        "gap": 0,
+                        "count": [25, 50],
                         "template": "puzzle_4_point",
-                    }
+                    },
                 ],
             },
             "puzzle_4_point": {
                 "type": "Point",
-                "color": 9,
+                "color": [1, 9],
                 "size": {"width": 1, "height": 1},
             },
             "puzzle_5": {
@@ -200,7 +211,84 @@ if __name__ == "__main__":
                 "edge_color": 1,
                 "vertice_color": 2,
                 "cut": {"tl":0, "tr":[1,5], "br":0, "bl":[2,6,2]}
-            }
+            },
+            "puzzle_6": {
+                "template": "puzzle_item",
+                "geometries": [
+                    {
+                        "count": 4,
+                        "grid": {
+                            "dir": [0, 2, 2],
+                            "primary_dir": 2,
+                            "cols": { "count": 2, "gap": 0 },
+                            "rows": { "count": 2, "gap": 0 },
+                            "cell_alignment": {
+                                "top": True,
+                                "bottom": True,
+                                "left": True,
+                                "right": True,
+                            }
+                        },
+                        "template": "puzzle_6_block",
+                    },
+                ],
+            },
+            "puzzle_6_block": {
+                "type": "None",
+                "size": {"width": 5, "height": 5},
+                "geometries": [
+                    {
+                        "count": [5, 10],
+                        "template": "puzzle_6_point",
+                    }
+                ],
+            },
+            "puzzle_6_point": {
+                "type": "Point",
+                "color": [2,7],
+                "size": {"width": 1, "height": 1},
+            },
+            "puzzle_7": {
+                "template": "puzzle_item",
+                "geometries": [
+                    {
+                        "count": [20, 40],
+                        "template": "puzzle_4_point",
+                        "pattern": [0],
+                        "pool": [{ "color": 1 }]
+                    },
+                    {
+                        "count": [20, 40],
+                        "template": "puzzle_4_point",
+                        "pattern": [0],
+                        "pool": [{ "color": 2 }]
+                    },
+                    {
+                        "count": [20, 40],
+                        "template": "puzzle_4_point",
+                        "pattern": [0],
+                        "pool": [{ "color": 3 }]
+                    },
+                    {
+                        "count": [20, 40],
+                        "template": "puzzle_4_point",
+                        "pattern": [0],
+                        "pool": [{ "color": 4 }]
+                    },
+                    {
+                        "count": [20, 40],
+                        "template": "puzzle_4_point",
+                        "pattern": [0],
+                        "pool": [{ "color": 6 }]
+                    },
+                    {
+                        "count": [20, 40],
+                        "template": "puzzle_4_point",
+                        "pattern": [0],
+                        "pool": [{ "color": 7 }]
+                    },
+                ],
+            },
         },
     }
 
