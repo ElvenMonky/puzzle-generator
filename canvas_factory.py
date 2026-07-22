@@ -10,7 +10,6 @@ KIND_DCOL = {0: 1, 1: 1, 2: 0, 3: -1, 4: -1, 5: -1, 6: 0, 7: 1}
 KIND_DROW = {0: 0, 1: 1, 2: 1, 3: 1, 4: 0, 5: -1, 6: -1, 7: -1}
 
 TypeSpec = Literal["None", "Line", "Point", "Polygon"]
-LinkOrderSpec = Literal["rng", "bfs", "dfs"]
 
 class CutSpec(TypedDict, total=False):
     tl: RangeSpec
@@ -36,7 +35,7 @@ class AlignmentSpec(TypedDict, total=False):
     right: bool
 
 class GridSpec(TypedDict, total=False):
-    order: LinkOrderSpec
+    cell_alignment: AlignmentSpec
     dir: RangeSpec
     root_dir: RangeSpec
     levels: DimensionSpec
@@ -44,7 +43,6 @@ class GridSpec(TypedDict, total=False):
     cols: DimensionSpec
     color: RangeSpec
     above: bool
-    cell_alignment: AlignmentSpec
 
 class GeometryTemplateSpec(TypedDict, total=False):
     template: str
@@ -87,15 +85,14 @@ class GeometryReference:
 @dataclass
 class DimensionData:
     count: RangeSpec = 32
+    gap: Optional[RangeSpec] = None
     prefix: list[int] = field(default_factory=list)
     pattern: list[int] = field(default_factory=list)
-    gap: Optional[RangeSpec] = None
 
 @dataclass
 class GridData:
-    order: LinkOrderSpec = "rng"
     dir: RangeSpec = 0
-    root_dir: RangeSpec = 0
+    primary_dir: int = 0
     levels: Optional[DimensionData] = None
     rows: Optional[DimensionData] = None
     cols: Optional[DimensionData] = None
@@ -212,11 +209,11 @@ class GeometryGroup(BoundedSolver):
                         And(kind[i] == -1, parent[i] == -1)))
                 solver.add(Implies(i < cnt, And([Or(row[i] != row[j], col[i] != col[j]) for j in range(i)])))
 
-                for axis, var in (("rows", row[i]), ("cols", col[i]), ("levels", level[i])):
-                    dim = getattr(grid, axis)
-                    if dim is not None:
-                        _, hi, _ = parse_range(dim.count)
-                        solver.add(Implies(active, var < hi))
+                for dim_name, var_list in [("rows", row), ("cols", col), ("levels", level)]:
+                    dim_data = getattr(grid, dim_name)
+                    if dim_data is not None:
+                        _, hi, _ = parse_range(dim_data.count)
+                        solver.add(Implies(active, var_list[i] < hi))
 
                 for j in range(i):
                     is_parent = parent[i] == j

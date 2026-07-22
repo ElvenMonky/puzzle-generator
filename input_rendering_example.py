@@ -71,7 +71,7 @@ if __name__ == "__main__":
                         "count": [2, 5],
                         "gap": 1,
                         "template": "puzzle_1_blob_piece",
-                        "grid": {"order": "dfs", "dir": [0, 7]},
+                        "grid": {},
                         "prefix": [0],
                         "pattern": [-1],
                         "pool": [
@@ -150,7 +150,7 @@ if __name__ == "__main__":
                         "prefix": [0],
                         "pattern": [1],
                         "template": "puzzle_3_node",
-                        "grid": {"order": "bfs", "dir": [0, 7], "root_dir": [0, 7]},
+                        "grid": {},
                         
                     }
                 ],
@@ -172,7 +172,7 @@ if __name__ == "__main__":
                         "margin": 1,
                         "gap": 0,
                         "template": "puzzle_4_point",
-                        "grid": {"order": "rng"},
+                        "grid": {},
                         "pool": [{"template": "puzzle_4_point"}],
                     }
                 ],
