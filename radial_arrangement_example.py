@@ -18,6 +18,7 @@ CONFIGS = {
         ray_starts=[(0, 2)],
         turn_pattern=[2],
         growth_pattern=[0, 2],
+        gap_pattern=[0, 0, 2]
     ),
     "galaxy (4 arms, 45°/2, +1 growth)": dict(
         ray_starts=[(1, 1), (3, 1), (5, 1), (7, 1)],

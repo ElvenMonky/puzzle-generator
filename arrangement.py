@@ -11,6 +11,13 @@ def in_bounds(p: Point, size: Point) -> bool:
 DX = [1, 1, 0, -1, -1, -1, 0, 1]
 DY = [0, 1, 1, 1, 0, -1, -1, -1]
 
+def _lookup(idx: int, prefix: list[int], pattern: list[int], default: int) -> int:
+    if idx < len(prefix):
+        return prefix[idx]
+    if not pattern:
+        return default
+    return pattern[(idx - len(prefix)) % len(pattern)]
+
 TurnMode = Literal["next", "random"]
 CollisionMode = Literal["stop", "skip"]
 RaySelection = Literal["same", "next", "random"]
@@ -30,6 +37,7 @@ class _Ray:
     interval: int
     pos: Point
     turn_idx: int = 0
+    step_idx: int = 0
     steps_left: int = field(init=False)
     tail: set = field(default_factory=set)
     active: bool = True
@@ -62,33 +70,26 @@ class RadialArrangement(Arrangement):
     growth_pattern: list[int] = field(default_factory=list)
     fork_prefix: list[int] = field(default_factory=list)
     fork_pattern: list[int] = field(default_factory=list)
+    gap_prefix: list[int] = field(default_factory=list)
+    gap_pattern: list[int] = field(default_factory=list)
     ray_selection: RaySelection = "next"
     turn_mode: TurnMode = "next"
     collision_mode: CollisionMode = "stop"
     seed: Optional[int] = None
 
     def _turn(self, idx: int, rng: random.Random) -> int:
-        if idx < len(self.turn_prefix):
-            return self.turn_prefix[idx]
-        if not self.turn_pattern:
-            return 0
-        if self.turn_mode == "random":
+        if self.turn_mode == "random" and idx >= len(self.turn_prefix) and self.turn_pattern:
             return rng.choice(self.turn_pattern)
-        return self.turn_pattern[(idx - len(self.turn_prefix)) % len(self.turn_pattern)]
+        return _lookup(idx, self.turn_prefix, self.turn_pattern, 0)
 
     def _growth(self, idx: int) -> int:
-        if idx < len(self.growth_prefix):
-            return self.growth_prefix[idx]
-        if not self.growth_pattern:
-            return 0
-        return self.growth_pattern[(idx - len(self.growth_prefix)) % len(self.growth_pattern)]
+        return _lookup(idx, self.growth_prefix, self.growth_pattern, 0)
 
     def _fork(self, idx: int) -> int:
-        if idx < len(self.fork_prefix):
-            return self.fork_prefix[idx]
-        if not self.fork_pattern:
-            return -1
-        return self.fork_pattern[(idx - len(self.fork_prefix)) % len(self.fork_pattern)]
+        return _lookup(idx, self.fork_prefix, self.fork_pattern, -1)
+
+    def _gap(self, idx: int) -> int:
+        return _lookup(idx, self.gap_prefix, self.gap_pattern, 0)
 
     def _exhausted(self, idx: int) -> bool:
         return (
@@ -133,7 +134,9 @@ class RadialArrangement(Arrangement):
 
             ray.pos = nxt
             ray.tail.add(nxt)
-            if nxt not in occupied:
+            gap = self._gap(ray.step_idx)
+            ray.step_idx += 1
+            if not gap and nxt not in occupied:
                 occupied.add(nxt)
                 cells.append(nxt)
 
